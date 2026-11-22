@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>RID 移动监测</title>
+<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<style>
+  html,body{margin:0;height:100%;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  #map{position:absolute;inset:0}
+  #panel{position:absolute;z-index:1000;top:8px;left:8px;width:min(78vw,300px);max-height:72vh;overflow:auto;
+    background:rgba(255,255,255,.95);border-radius:12px;padding:10px 12px;box-shadow:0 2px 12px rgba(0,0,0,.25);font-size:13px}
+  #panel h3{margin:0 0 8px;font-size:15px}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #eee}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+  .ok{background:#2ecc71}.bad{background:#e74c3c}
+  .item{padding:6px 4px;border-bottom:1px solid #eee;cursor:pointer}
+  .item:hover{background:#f0f7ff}
+  .item b{font-size:13px}.item small{color:#666}
+  button{width:100%;padding:11px;border:0;border-radius:9px;background:#2563eb;color:#fff;font-size:15px;font-weight:600;margin-bottom:8px}
+  button:disabled{background:#94a3b8}
+  #stat{font-size:12px;color:#555;line-height:1.6}
+  .leaflet-popup-content{font-size:12px;line-height:1.55}
+</style>
+</head>
+<body>
+<div id="panel">
+  <h3>🛰 RID 移动监测</h3>
+  <button id="connBtn">🔌 连接串口</button>
+  <div id="stat">未连接。用 OTG 线接上扫描板后点上面按钮，授权 USB。</div>
+  <div id="list" style="margin-top:8px"></div>
+</div>
+<div id="map"></div>
+<script>
+// ===== WGS84 -> GCJ02（高德底图纠偏）=====
+const PI=3.14159265358979324, A=6378245.0, EE=0.00669342162296594323;
+function outChina(lng,lat){return lng<72.004||lng>137.8347||lat<0.8293||lat>55.8271;}
+function tLat(x,y){let r=-100+2*x+3*y+0.2*y*y+0.1*x*y+0.2*Math.sqrt(Math.abs(x));
+ r+=(20*Math.sin(6*x*PI)+20*Math.sin(2*x*PI))*2/3;r+=(20*Math.sin(y*PI)+40*Math.sin(y/3*PI))*2/3;
+ r+=(160*Math.sin(y/12*PI)+320*Math.sin(y*PI/30.0))*2/3;return r;}
+function tLon(x,y){let r=300+x+2*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));
+ r+=(20*Math.sin(6*x*PI)+20*Math.sin(2*x*PI))*2/3;r+=(20*Math.sin(x*PI)+40*Math.sin(x/3*PI))*2/3;
+ r+=(150*Math.sin(x/12*PI)+300*Math.sin(x/30*PI))*2/3;return r;}
+function w2g(lng,lat){
+ if(outChina(lng,lat))return[lat,lng];
+ let dLat=tLat(lng-105.0,lat-35.0),dLon=tLon(lng-105.0,lat-35.0);
+ const rLat=lat/180.0*PI;let magic=Math.sin(rLat);magic=1-EE*magic*magic;const sm=Math.sqrt(magic);
+ dLat=(dLat*180.0)/((A*(1-EE))/(magic*sm)*PI);dLon=(dLon*180.0)/(A/sm*Math.cos(rLat)*PI);
+ return[lat+dLat,lng+dLon];
+}
+
+// ===== 地图 =====
+const map=L.map('map',{zoomControl:false}).setView([19.68,109.68],10);
+L.control.zoom({position:'bottomright'}).addTo(map);
+const street=L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+ {subdomains:'1234',maxZoom:18,attribution:'高德'});
+const sat=L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',{subdomains:'1234',maxZoom:18});
+const label=L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}',{subdomains:'1234',maxZoom:18});
+street.addTo(map);
+L.control.layers({'街道图':street,'卫星图':L.layerGroup([sat,label])},{position:'bottomright'}).addTo(map);
+
+const droneIcon=L.divIcon({className:'',html:'<div style="font-size:26px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🛸</div>',iconSize:[30,30],iconAnchor:[15,15]});
+const pilotIcon=L.divIcon({className:'',html:'<div style="font-size:24px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🧑‍✈️</div>',iconSize:[26,26],iconAnchor:[13,13]});
+
+const drones={};
+let connected=false;
+const stats={wifi:0,ble:0,last:''};
+
+const $=id=>document.getElementById(id);
+function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+function render(){
+ const keys=Object.keys(drones);
+ $('list').innerHTML=keys.map(k=>{
+   const d=drones[k];
+   return `<div class="item" onclick="flyTo('${k}')"><b>🛸 ${esc(d.basic_id||k.slice(0,10))}</b><br>
+     <small>${esc(d.interface||'')} · RSSI ${d.rssi??'-'}dBm · ${esc(d.status_text||'')}</small></div>`;
+ }).join('');
+ let html=`<div class="row"><span><span class="dot ${connected?'ok':'bad'}"></span>串口</span><b>${connected?'已连接':'未连接'}</b></div>`;
+ html+=`<div class="row"><span>在线飞机</span><b>${keys.length}</b></div>`;
+ html+=`<div class="row"><span>WiFi帧</span><b>${stats.wifi}</b></div>`;
+ html+=`<div class="row"><span>BLE广播</span><b>${stats.ble}</b></div>`;
+ if(stats.last)html+=`<div style="margin-top:4px;color:#888">最后数据:${esc(stats.last)}</div>`;
+ $('stat').innerHTML=html;
+}
+window.flyTo=function(k){const d=drones[k];if(d&&d.drone_lat)map.flyTo(w2g(d.drone_long,d.drone_lat),16);};
+
+function upsert(d){
+ const k=d.mac;const old=drones[k]||{};
+ d._markers=old._markers||null;
+ drones[k]=d;
+ if(d.drone_lat&&d.drone_long){
+   const p=w2g(d.drone_long,d.drone_lat);
+   let mk=(d._markers&&d._markers.drone)||null;
+   if(!mk){mk=L.marker(p,{icon:droneIcon}).addTo(map);}else mk.setLatLng(p);
+   mk.bindPopup(`<b>🛸 ${esc(d.basic_id||'')}</b><br>${esc(d.interface||'')} RSSI ${d.rssi}dBm<br>
+     高度${d.drone_altitude}m 离地${d.height_agl}m<br>速度${d.speed_horizontal}m/s 航向${d.heading}°<br>
+     ${d.drone_lat.toFixed(6)},${d.drone_long.toFixed(6)}`);
+   let pm=(d._markers&&d._markers.pilot)||null,line=(d._markers&&d._markers.line)||null;
+   if(d.pilot_lat&&d.pilot_long){
+     const pp=w2g(d.pilot_long,d.pilot_lat);
+     if(!pm){pm=L.marker(pp,{icon:pilotIcon}).addTo(map);}else pm.setLatLng(pp);
+     pm.bindPopup(`<b>🧑‍✈️ 飞手</b><br>${esc(d.operator_id||'')}<br>${d.pilot_lat.toFixed(6)},${d.pilot_long.toFixed(6)}`);
+     if(line)line.setLatLngs([p,pp]);else line=L.polyline([p,pp],{color:'#f59e0b',dashArray:'5,6',weight:1.5}).addTo(map);
+   }
+   d._markers={drone:mk,pilot:pm,line};
+   if(Object.keys(drones).length===1)map.setView(p,15);
+ }
+}
+
+// ===== 处理一行 JSON（原生桥回传）=====
+function handleLine(line){
+ if(!line.startsWith('{'))return;
+ try{
+   const o=JSON.parse(line);
+   stats.last=new Date().toLocaleTimeString();
+   if(o.type==='drone')upsert(o);
+   else if(o.type==='wifi_debug')stats.wifi=o.mgmt_total??stats.wifi;
+   else if(o.type==='ble_debug')stats.ble=o.adv_total??stats.ble;
+ }catch(e){}
+ render();
+}
+
+// ===== 原生 USB 串口桥（替代 navigator.serial）=====
+// 由 MainActivity 注入 window.AndroidSerial；数据/状态通过下面两个全局回调推送
+window.onNativeSerialLine=function(payload){
+ // 安卓注入时传的是对象 {line:"..."}，兼容直接传字符串
+ const line=(typeof payload==='string')?payload:payload.line;
+ handleLine(line);
+};
+window.onNativeSerialState=function(payload){
+ connected=!!payload.connected;
+ $('connBtn').textContent=connected?'⏹ 断开':'🔌 连接串口';
+ if(!connected && payload.message){
+   $('stat').innerHTML='<span style="color:#e74c3c">'+esc(payload.message)+'</span>';
+ }
+ render();
+};
+
+$('connBtn').onclick=function(){
+ if(!window.AndroidSerial){
+   $('stat').innerHTML='<span style="color:#e74c3c">原生串口桥未就绪，请用 APK 打开本页</span>';
+   return;
+ }
+ if(connected){ AndroidSerial.disconnect(); return; }
+ try{
+   AndroidSerial.connect();   // 结果经 onNativeSerialState 异步返回
+   $('stat').textContent='正在请求 USB 权限并连接…';
+ }catch(e){
+   $('stat').innerHTML='<span style="color:#e74c3c">连接失败:'+esc(e.message)+'</span><br>确认 OTG 已接、已授权 USB。';
+ }
+};
+render();
+</script>
+</body>
+</html>

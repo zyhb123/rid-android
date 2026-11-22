@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB 串口设备过滤（vid/pid 均为十进制）。仅用于插入时弹"用本应用打开"；
+     实际连接由 UsbSerialProber 动态枚举兜底，未列中的 CDC 设备仍能在 APP 内手动连。 -->
+<resources>
+    <!-- 0x1A86 沁恒：CH340(0x7523=29987)、CH343/CH9102(0x5523=21795)、CH340 变体(0x7522=29986) -->
+    <usb-device vendor-id="6790" product-id="29987" />
+    <usb-device vendor-id="6790" product-id="29986" />
+    <usb-device vendor-id="6790" product-id="21795" />
+    <usb-device vendor-id="6790" product-id="21796" />
+    <!-- 0x10C4 Silicon Labs CP210x（0xEA60=60000） -->
+    <usb-device vendor-id="4292" product-id="60000" />
+    <!-- 0x0403 FTDI FT232（0x6001=24577） -->
+    <usb-device vendor-id="1027" product-id="24577" />
+    <!-- 0x067B Prolific PL2303（0x2303=8963） -->
+    <usb-device vendor-id="1659" product-id="8963" />
+    <!-- 0x303A Espressif ESP32-S3 原生 CDC（0x1001=4097） -->
+    <usb-device vendor-id="12346" product-id="4097" />
+</resources>

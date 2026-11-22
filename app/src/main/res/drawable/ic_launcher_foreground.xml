@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 简约雷达/无人机图标，纯矢量，无需二进制 PNG -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 雷达圆环 -->
+    <path
+        android:strokeColor="#38bdf8"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,54 m-26,0 a26,26 0 1,0 52,0 a26,26 0 1,0 -52,0" />
+    <path
+        android:strokeColor="#0ea5e9"
+        android:strokeWidth="2"
+        android:fillColor="#00000000"
+        android:pathData="M54,54 m-15,0 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0" />
+    <!-- 中心无人机 -->
+    <path
+        android:fillColor="#f8fafc"
+        android:pathData="M54,48 h0.1 a4,4 0 0,1 4,4 v4 a4,4 0 0,1 -4,4 h-0.1 a4,4 0 0,1 -4,-4 v-4 a4,4 0 0,1 4,-4 z" />
+    <!-- 四臂 -->
+    <path android:strokeColor="#e2e8f0" android:strokeWidth="2.2" android:pathData="M50,52 L42,46 M58,52 L66,46 M50,56 L42,62 M58,56 L66,62" />
+    <!-- 四旋翼 -->
+    <path android:fillColor="#38bdf8" android:pathData="M42,46 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0 M66,46 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0 M42,62 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0 M66,62 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+</vector>
