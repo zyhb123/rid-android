@@ -68,9 +68,9 @@ jobs:
           mkdir -p dist
           cp "$APK" dist/RIDScanner-latest.apk
           SIZE=$(stat -c%s dist/RIDScanner-latest.apk)
-          # 直接从 build.gradle.kts 解析版本号，避免额外 gradle 任务
-          VCODE=$(grep -E 'versionCode' app/build.gradle.kts | head -1 | grep -oE '[0-9]+' | head -1)
-          VNAME=$(grep -E 'versionName' app/build.gradle.kts | head -1 | grep -oE '"[0-9.]+"' | tr -d '"')
+          # 只匹配真正的赋值行（行首可有空格），排除 // 注释里的 versionCode 字样，避免取到 v7 的 7
+          VCODE=$(grep -E '^[[:space:]]*versionCode[[:space:]]*=' app/build.gradle.kts | grep -oE '[0-9]+' | head -1)
+          VNAME=$(grep -E '^[[:space:]]*versionName[[:space:]]*=' app/build.gradle.kts | grep -oE '"[0-9.]+"' | tr -d '"')
           if [ -z "$VCODE" ]; then VCODE=2; fi
           if [ -z "$VNAME" ]; then VNAME="1.1.0"; fi
           NOTES="${{ github.event.inputs.release_notes }}"
