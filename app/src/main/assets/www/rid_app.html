@@ -230,9 +230,27 @@ window.addEventListener('error',function(ev){
     return h;
   }
 
-  function upsert(d){
-    var key=d.mac||d.basic_id||('u'+order.length);
+  // 纯 ES5 字段级合并（与固件 wifi_merge_uav 双保险）：
+  // incoming 里缺失的 key、空字符串保留历史值；数值(含0)照常采纳（0 可能是悬停/地面等真值）。
+  function mergeUav(prev,incoming){
+    var out={},k;
+    if(prev){ for(k in prev){ if(prev.hasOwnProperty(k)) out[k]=prev[k]; } }
+    for(k in incoming){
+      if(!incoming.hasOwnProperty(k)) continue;
+      var v=incoming[k];
+      if(v===null||v===undefined) continue;      // 本帧缺该 key：保留历史
+      if(typeof v==='string' && v==='') continue; // 空串(未收到的序列号/操作员号)：保留历史
+      out[k]=v;
+    }
+    return out;
+  }
+  function upsert(incoming){
+    var key=incoming.mac||incoming.basic_id||('u'+order.length);
+    var prev=drones[key];
+    var d=mergeUav(prev,incoming);
     d.id=key;
+    // 继承地图对象，避免整体替换后重复 addTo 产生多个标记
+    if(prev){ d.marker=prev.marker; d.pilotMarker=prev.pilotMarker; }
     computeDist(d);
     if(!drones[key]){ order.unshift(key); }
     drones[key]=d;
