@@ -9,6 +9,10 @@
 <style>
   html,body{margin:0;height:100%;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
   #map{position:absolute;inset:0}
+  #recenterBtn{position:absolute;z-index:1000;top:12px;right:12px;padding:9px 14px;font-size:13px;font-weight:700;
+    color:#0c4a6e;background:#fff;border:1px solid #cbd5e1;border-radius:22px;box-shadow:0 2px 8px rgba(15,23,42,.25);
+    cursor:pointer;white-space:nowrap}
+  #recenterBtn:active{background:#e0f2fe}
   #panel{position:absolute;z-index:1000;top:8px;left:8px;width:min(72vw,300px);max-height:74vh;overflow:auto;
     background:rgba(255,255,255,.96);border-radius:10px;padding:8px 10px;box-shadow:0 2px 12px rgba(0,0,0,.25);font-size:12px;transition:width .2s}
   #panel h3{margin:0 0 6px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
@@ -63,6 +67,7 @@
   </div>
 </div>
 <div id="map"></div>
+<button id="recenterBtn" type="button" onclick="App.recenter()">📍 回到我位置</button>
 <script>
 // ====================================================================
 // 全局错误捕获：老 WebView 不兼容/任何 JS 报错直接显示到页面，截图即可定位
@@ -418,6 +423,32 @@ window.addEventListener('error',function(ev){
       refreshPhone();
       if(locTimer){ clearInterval(locTimer); }
       locTimer=setInterval(refreshPhone,3000);   // 每3秒刷新本机位置与距离
+    },
+    // 一键回到我的实时位置（地图被拖远后快速飞回）
+    recenter:function(){
+      if(!window.AndroidLocation){ setStat('定位桥未注入（需新版 APP）',false); return; }
+      // 先立即拉一次最新坐标，保证飞的是当前位置而不是旧缓存
+      refreshPhone();
+      if(!phone){
+        // 还没拿到过坐标：启动定位并提示
+        if(!locTimer){
+          if(window.AndroidLocation.hasPermission && window.AndroidLocation.hasPermission()){
+            window.App.locate();
+          } else {
+            setStat('定位权限未授予，请先点「开启本机定位」授权',false);
+            return;
+          }
+        }
+        setStat('正在获取你的位置，请稍候再点一次',false);
+        return;
+      }
+      var gcj=w2g(phone.lng,phone.lat);
+      try{
+        map.setView(gcj,16,{animate:true});   // 街道级，比首启的15更近一点，符合“找回我”的精细需求
+        if(window._phoneMarker){ window._phoneMarker.openPopup(); }
+      }catch(e){}
+      var accTxt=(phone.acc&&phone.acc>0)?('（精度±'+Math.round(phone.acc)+'米）'):'';
+      setStat('已回到你的实时位置'+accTxt,true);
     },
     checkUpdate:function(){
       var bridge=window.AndroidOta;

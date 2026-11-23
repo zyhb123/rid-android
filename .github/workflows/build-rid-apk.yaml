@@ -71,10 +71,10 @@ jobs:
           # 只匹配真正的赋值行（行首可有空格），排除 // 注释里的 versionCode 字样，避免取到 v7 的 7
           VCODE=$(grep -E '^[[:space:]]*versionCode[[:space:]]*=' app/build.gradle.kts | grep -oE '[0-9]+' | head -1)
           VNAME=$(grep -E '^[[:space:]]*versionName[[:space:]]*=' app/build.gradle.kts | grep -oE '"[0-9.]+"' | tr -d '"')
-          if [ -z "$VCODE" ]; then VCODE=2; fi
-          if [ -z "$VNAME" ]; then VNAME="1.1.0"; fi
+          if [ -z "$VCODE" ]; then VCODE=3; fi
+          if [ -z "$VNAME" ]; then VNAME="1.2.0"; fi
           NOTES="${{ github.event.inputs.release_notes }}"
-          [ -z "$NOTES" ] && NOTES="RID 监测 v${VNAME}：应用内升级、启动自动定位、诊断面板等更新。"
+          [ -z "$NOTES" ] && NOTES="RID 监测 v${VNAME}：应用内升级、启动自动定位、地图一键回到我位置、射频诊断面板等更新。"
           cat > dist/update.json <<JSON
           {
             "versionCode": ${VCODE},

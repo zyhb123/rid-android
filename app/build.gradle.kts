@@ -11,9 +11,9 @@ android {
         applicationId = "com.zhangyuan.ridscanner"
         minSdk = 26          // Android 8.0；鸿蒙 4.2 兼容层足够
         targetSdk = 34
-        // v7：versionCode 1->2，versionName 1.0.0->1.1.0。OTA 靠 versionCode 大小判断新旧。
-        versionCode = 2
-        versionName = "1.1.0"
+        // OTA 靠 versionCode 大小判断新旧。v6=1(随机debug签名)；v7=2(1.1.0)；新增“回到我位置”=3(1.2.0)。
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     // 固定签名：CI 从 GitHub Secrets 解码 keystore 并经环境变量注入。
