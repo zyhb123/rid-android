@@ -9,25 +9,32 @@
 <style>
   html,body{margin:0;height:100%;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
   #map{position:absolute;inset:0}
-  #panel{position:absolute;z-index:1000;top:8px;left:8px;width:min(58vw,228px);max-height:60vh;overflow:auto;
-    background:rgba(255,255,255,.95);border-radius:10px;padding:8px 10px;box-shadow:0 2px 12px rgba(0,0,0,.25);font-size:12px;transition:width .2s}
+  #panel{position:absolute;z-index:1000;top:8px;left:8px;width:min(72vw,300px);max-height:74vh;overflow:auto;
+    background:rgba(255,255,255,.96);border-radius:10px;padding:8px 10px;box-shadow:0 2px 12px rgba(0,0,0,.25);font-size:12px;transition:width .2s}
   #panel h3{margin:0 0 6px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
   #foldBtn{background:transparent;color:#2563eb;box-shadow:none;width:auto;padding:2px 6px;font-size:16px;font-weight:700;margin:0;line-height:1}
   #panel.folded{width:auto;max-height:none;overflow:visible}
   #panel.folded #body{display:none}
-  .row{display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #eee}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
   .ok{background:#2ecc71}.bad{background:#e74c3c}
-  .item{padding:6px 4px;border-bottom:1px solid #eee;cursor:pointer}
+  .item{padding:7px 5px;border-bottom:1px solid #eee;cursor:pointer;border-radius:6px}
   .item:hover{background:#f0f7ff}
-  .item b{font-size:13px}.item small{color:#666}
+  .item .t{font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+  .item .meta{color:#555;margin-top:3px;line-height:1.5}
+  .item .dist{color:#b45309;font-weight:700}
+  .badge{display:inline-block;padding:1px 6px;border-radius:9px;font-size:10.5px;font-weight:600;color:#fff}
+  .b-ground{background:#64748b}.b-air{background:#16a34a}.b-emg{background:#dc2626}.b-fault{background:#ea580c}.b-unk{background:#94a3b8}
   button{width:100%;padding:9px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;font-weight:600;margin-bottom:6px}
   button:disabled{background:#94a3b8}
   #stat{font-size:12px;color:#555;line-height:1.6}
   #diagBtn{background:#475569;font-size:12px;padding:7px;margin-bottom:4px}
+  #locBtn{background:#0891b2;font-size:12px;padding:7px;margin-bottom:4px}
   #diagOut{display:none;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;line-height:1.5;
     background:#0f172a;color:#e2e8f0;border-radius:6px;padding:6px;margin:4px 0;white-space:pre-wrap;
-    word-break:break-all;max-height:38vh;overflow:auto}
+    word-break:break-all;max-height:42vh;overflow:auto}
+  .kv{display:flex;justify-content:space-between;gap:8px;padding:1px 0}
+  .kv .k{color:#64748b}.kv .v{text-align:right;font-weight:600;word-break:break-all}
+  .note{color:#b45309;font-size:10.5px;line-height:1.4;margin-top:4px;background:#fef3c7;padding:4px 6px;border-radius:5px}
   .leaflet-popup-content{font-size:12px;line-height:1.55}
 </style>
 </head>
@@ -37,6 +44,7 @@
   <div id="body">
     <button id="connBtn" type="button" onclick="App.connect()">🔌 连接串口</button>
     <button id="diagBtn" type="button" onclick="App.diagnose()">🔍 USB 诊断（连不上先点这个）</button>
+    <button id="locBtn" type="button" onclick="App.locate()">📍 开启本机定位（算手机距离）</button>
     <pre id="diagOut"></pre>
     <div id="stat">未连接，接 OTG 扫描板后点上方按钮</div>
     <div id="list" style="margin-top:6px"></div>
@@ -58,212 +66,344 @@ window.addEventListener('error',function(ev){
 });
 
 // ====================================================================
-// 全部业务逻辑放进一个 IIFE，App 挂 window 供内联 onclick 调用。
-// 关键：按钮处理函数在【地图初始化之前】就定义好，地图即使报错也不影响按钮。
-// 全程 ES2015 语法（不用 ?? / 可选链等 ES2020），兼容老安卓 WebView。
+// RID 移动监测 v6：字段严格对齐固件 send_json 协议（main.c），全程 ES5。
+// 固件真实字段：mac/interface/rssi/channel/rate/noise_floor/id_type/ua_type/
+//   basic_id/drone_lat/drone_long/drone_altitude/height_agl/speed_horizontal/
+//   speed_vertical/heading/status/pilot_lat/pilot_long/area_*/operator_id
 // ====================================================================
 (function(){
   'use strict';
-  var $=function(id){return document.getElementById(id);};
-  function nv(v,d){return (v==null?d:v);}
-  function esc(s){return String(nv(s,'')).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 
-  // ===== WGS84 -> GCJ02（高德底图纠偏）=====
-  var PI=3.14159265358979324, A=6378245.0, EE=0.00669342162296594323;
-  function outChina(lng,lat){return lng<72.004||lng>137.8347||lat<0.8293||lat>55.8271;}
-  function tLat(x,y){var r=-100+2*x+3*y+0.2*y*y+0.1*x*y+0.2*Math.sqrt(Math.abs(x));
-   r+=(20*Math.sin(6*x*PI)+20*Math.sin(2*x*PI))*2/3;r+=(20*Math.sin(y*PI)+40*Math.sin(y/3*PI))*2/3;
-   r+=(160*Math.sin(y/12*PI)+320*Math.sin(y*PI/30.0))*2/3;return r;}
-  function tLon(x,y){var r=300+x+2*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));
-   r+=(20*Math.sin(6*x*PI)+20*Math.sin(2*x*PI))*2/3;r+=(20*Math.sin(x*PI)+40*Math.sin(x/3*PI))*2/3;
-   r+=(150*Math.sin(x/12*PI)+300*Math.sin(x/30*PI))*2/3;return r;}
-  function w2g(lng,lat){
-   if(outChina(lng,lat))return[lat,lng];
-   var dLat=tLat(lng-105.0,lat-35.0),dLon=tLon(lng-105.0,lat-35.0);
-   var rLat=lat/180.0*PI;var magic=Math.sin(rLat);magic=1-EE*magic*magic;var sm=Math.sqrt(magic);
-   dLat=(dLat*180.0)/((A*(1-EE))/(magic*sm)*PI);dLon=(dLon*180.0)/(A/sm*Math.cos(rLat)*PI);
-   return[lat+dLat,lng+dLon];
+  // ---------- 枚举表（数值取自 opendroneid.h，禁止臆造）----------
+  var UA_TYPE = {
+    0:'未声明', 1:'固定翼', 2:'直升机/多旋翼', 3:'倾斜旋翼', 4:'旋翼机',
+    5:'轻型比空气重(<25kg)', 6:'滑翔机', 7:'自由气球', 8:'系留气球',
+    9:'飞艇(动力)', 10:'伞兵伞', 11:'动力翼伞', 12:'滑翔伞',
+    13:'滑翔伞(跳伞)', 14:'滑翔伞(牵引)', 15:'其他'
+  };
+  var ID_TYPE = {
+    0:'无', 1:'序列号', 2:'民航注册号', 3:'UTM分配UUID', 4:'特定会话ID'
+  };
+  var STATUS = {
+    0:'未声明', 1:'地面待机', 2:'空中飞行', 3:'紧急状态', 4:'RID系统故障'
+  };
+  function statusBadge(s){
+    var cls={1:'b-ground',2:'b-air',3:'b-emg',4:'b-fault'}[s]||'b-unk';
+    var txt=STATUS[s]||('状态'+s);
+    return '<span class="badge '+cls+'">'+txt+'</span>';
   }
 
-  // ===== 状态 =====
-  var map=null;            // 地图实例，初始化失败保持 null
-  var mapReady=false;      // 地图是否可用
-  var drones={};
+  // ---------- 工具 ----------
+  function nv(v,d){return (v==null?d:v);}
+  function esc(s){return String(nv(s,'')).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+  function num(v){return (typeof v==='number'&&isFinite(v))?v:null;}
+  // 固件无效坐标用 0/NaN 占位，判定是否有效经纬度
+  function validLatLng(la,ln){
+    la=num(la); ln=num(ln);
+    if(la==null||ln==null) return false;
+    if(la===0&&ln===0) return false;
+    return (la>=-90&&la<=90&&ln>=-180&&ln<=180);
+  }
+  function fmtDist(m){
+    if(m==null) return '—';
+    if(m<1000) return Math.round(m)+' 米';
+    return (m/1000).toFixed(2)+' 公里';
+  }
+  // haversine 球面距离，返回米
+  function haversine(lat1,lng1,lat2,lng2){
+    var R=6371000, toRad=Math.PI/180;
+    var dLat=(lat2-lat1)*toRad, dLng=(lng2-lng1)*toRad;
+    var a=Math.sin(dLat/2)*Math.sin(dLat/2)+
+          Math.cos(lat1*toRad)*Math.cos(lat2*toRad)*
+          Math.sin(dLng/2)*Math.sin(dLng/2);
+    return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  }
+  // RSSI 信号→粗略距离档（非精确测距，仅参考，需实地标定）
+  function rssiRange(rssi){
+    rssi=num(rssi);
+    if(rssi==null) return '无信号数据';
+    if(rssi>=-55) return '很近（约几十米内）';
+    if(rssi>=-70) return '近（百米级）';
+    if(rssi>=-85) return '中（数百米级）';
+    return '远/信号弱（约500米以上）';
+  }
+  function rssiColor(rssi){
+    rssi=num(rssi);
+    if(rssi==null) return '#94a3b8';
+    if(rssi>=-70) return '#16a34a';
+    if(rssi>=-85) return '#d97706';
+    return '#dc2626';
+  }
+
+  // ---------- GCJ-02 火星坐标（国内在线图必须转换，离线 OSM 可关掉）----------
+  var outChina=function(lng,lat){return lng<72.004||lng>137.8347||lat<0.8293||lat>55.8271;};
+  function tLat(x,y){var r=-100+2*x+3*y+0.2*y*y+0.1*x*y+0.2*Math.sqrt(Math.abs(x));
+    r+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;
+    r+=(20*Math.sin(y*Math.PI)+40*Math.sin(y/3*Math.PI))*2/3;
+    r+=(160*Math.sin(y/12*Math.PI)+320*Math.sin(y*Math.PI/30.0))*2/3;return r;}
+  function tLon(x,y){var r=300+x+2*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));
+    r+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;
+    r+=(20*Math.sin(x*Math.PI)+40*Math.sin(x/3*Math.PI))*2/3;
+    r+=(150*Math.sin(x/12*Math.PI)+300*Math.sin(x/30*Math.PI))*2/3;return r;}
+  function w2g(lng,lat){
+    if(outChina(lng,lat)) return [lat,lng];
+    var a=6378245.0, ee=0.00669342162296594323;
+    var dLat=tLat(lng-105.0,lat-35.0), dLon=tLon(lng-105.0,lat-35.0);
+    var radLat=lat/180.0*Math.PI, magic=Math.sin(radLat);
+    magic=1-ee*magic*magic; var sm=Math.sqrt(magic);
+    dLat=(dLat*180.0)/((a*(1-ee))/(magic*sm)*Math.PI);
+    dLon=(dLon*180.0)/(a/sm*Math.cos(radLat)*Math.PI);
+    return [lat+dLat,lng+dLon];
+  }
+
+  // ---------- 状态 ----------
+  var map=null, droneIcon=null, pilotIcon=null, phoneIcon=null;
+  var drones={};          // key=mac -> 最新数据对象
+  var order=[];           // 列表顺序
+  var phone=null;         // 本机定位 {lat,lng,acc,src}
   var connected=false;
-  var stats={wifi:0,ble:0,last:''};
-  var droneIcon=null, pilotIcon=null;
+  var lineBuf='';
+  var locTimer=null;
 
   function makeIcons(){
-    if(!window.L) return;
-    droneIcon=L.divIcon({className:'',html:'<div style="font-size:26px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🛸</div>',iconSize:[30,30],iconAnchor:[15,15]});
-    pilotIcon=L.divIcon({className:'',html:'<div style="font-size:24px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🧑‍✈️</div>',iconSize:[26,26],iconAnchor:[13,13]});
+    droneIcon=L.divIcon({className:'',iconSize:[26,26],iconAnchor:[13,13],html:
+      '<div style="font-size:22px;line-height:26px;text-align:center;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🛸</div>'});
+    pilotIcon=L.divIcon({className:'',iconSize:[24,24],iconAnchor:[12,12],html:
+      '<div style="font-size:20px;line-height:24px;text-align:center;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🧑‍✈️</div>'});
+    phoneIcon=L.divIcon({className:'',iconSize:[24,24],iconAnchor:[12,12],html:
+      '<div style="font-size:20px;line-height:24px;text-align:center;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">📍</div>'});
+  }
+
+  // ---------- 距离汇总（每条无人机实时计算）----------
+  function computeDist(d){
+    // 飞手 ↔ 无人机：双方坐标都来自 RID 报文，无需本机定位
+    if(validLatLng(d.drone_lat,d.drone_long)&&validLatLng(d.pilot_lat,d.pilot_long)){
+      d.distPilot=haversine(d.pilot_lat,d.pilot_long,d.drone_lat,d.drone_long);
+    } else { d.distPilot=null; }
+    // 手机 ↔ 无人机：依赖本机定位
+    if(phone&&validLatLng(d.drone_lat,d.drone_long)){
+      d.distPhone=haversine(phone.lat,phone.lng,d.drone_lat,d.drone_long);
+    } else { d.distPhone=null; }
   }
 
   function popupHtml(d){
-    var rows=[
-      ['序号',d.sn],['UA 类型',d.ua_type],['状态',d.status],['距离',d.distance_m!=null?d.distance_m+' m':'-'],
-      ['高度',d.height_m!=null?d.height_m+' m':'-'],['速度',d.speed_mps!=null?d.speed_mps+' m/s':'-'],
-      ['经纬度',d.lat?d.lat.toFixed(6)+', '+d.lng.toFixed(6):'-'],['高度类型',d.alt_type],['航向',d.direction_deg!=null?d.direction_deg+'°':'-'],
-      ['GPS',d.gps_num],['频点',d.freq_mhz?d.freq_mhz+' MHz':'-'],['RID 版本',d.rid_ver],
-      ['时间戳',d.timestamp],['MAC',d.mac],['飞行员距离',d.pilot_distance_m!=null?d.pilot_distance_m+' m':'-']
-    ];
-    return rows.map(function(r){return '<b>'+esc(r[0])+'</b>：'+esc(r[1]);}).join('<br>');
+    var h='<b>'+esc(UA_TYPE[d.ua_type]||('类型'+d.ua_type))+'</b> '+statusBadge(d.status)+'<br>';
+    h+='<div class="kv"><span class="k">序列号/ID</span><span class="v">'+esc(nv(d.basic_id,'—'))+'</span></div>';
+    h+='<div class="kv"><span class="k">ID类型</span><span class="v">'+esc(ID_TYPE[d.id_type]||d.id_type)+'</span></div>';
+    h+='<div class="kv"><span class="k">MAC</span><span class="v">'+esc(nv(d.mac,'—'))+'</span></div>';
+    h+='<div class="kv"><span class="k">信号RSSI</span><span class="v" style="color:'+rssiColor(d.rssi)+'">'+esc(nv(d.rssi,'—'))+' dBm</span></div>';
+    h+='<div class="kv"><span class="k">接收方式</span><span class="v">'+esc(nv(d.interface,'—'))+'</span></div>';
+    h+='<div class="kv"><span class="k">信道/速率</span><span class="v">'+esc(nv(d.channel,'—'))+' / '+esc(nv(d.rate,'—'))+'</span></div>';
+    h+='<div class="kv"><span class="k">高度(海拔/离地)</span><span class="v">'+esc(nv(d.drone_altitude,'—'))+' / '+esc(nv(d.height_agl,'—'))+' m</span></div>';
+    h+='<div class="kv"><span class="k">速度(水平/垂直)</span><span class="v">'+esc(nv(d.speed_horizontal,'—'))+' / '+esc(nv(d.speed_vertical,'—'))+' m/s</span></div>';
+    h+='<div class="kv"><span class="k">航向</span><span class="v">'+esc(nv(d.heading,'—'))+'°</span></div>';
+    h+='<div class="kv"><span class="k">飞手↔无人机</span><span class="v">'+fmtDist(d.distPilot)+'</span></div>';
+    h+='<div class="kv"><span class="k">手机↔无人机</span><span class="v">'+fmtDist(d.distPhone)+'</span></div>';
+    if(d.operator_id) h+='<div class="kv"><span class="k">运营人ID</span><span class="v">'+esc(d.operator_id)+'</span></div>';
+    h+='<div class="note">信号粗估距离：'+rssiRange(d.rssi)+'（仅供参考，最大探测距离需实地标定）</div>';
+    return h;
   }
 
-  function upsert(o){
-    var id=o.mac||o.sn||('u'+Object.keys(drones).length);
-    if(!drones[id])drones[id]={id:id};
-    var d=drones[id];
-    var keys=['sn','ua_type','status','distance_m','height_m','speed_mps','lat','lng','alt_type',
-      'direction_deg','gps_num','freq_mhz','rssi_dbm','rid_ver','timestamp','mac','pilot_lat','pilot_lng','pilot_distance_m'];
-    for(var i=0;i<keys.length;i++){var k=keys[i];if(o[k]!=null)d[k]=o[k];}
-    d.seen=Date.now();
-    if(mapReady&&d.lat!=null){
-      var gcj=w2g(d.lng,d.lat);
+  function upsert(d){
+    var key=d.mac||d.basic_id||('u'+order.length);
+    d.id=key;
+    computeDist(d);
+    if(!drones[key]){ order.unshift(key); }
+    drones[key]=d;
+    // 地图：无人机
+    if(validLatLng(d.drone_lat,d.drone_long)){
+      var gcj=w2g(d.drone_long,d.drone_lat);
       if(!d.marker){
         d.marker=L.marker(gcj,{icon:droneIcon}).addTo(map).bindPopup(popupHtml(d));
-      }else{
+      } else {
         d.marker.setLatLng(gcj);
-        d.marker._popup&&d.marker._popup.setContent(popupHtml(d));
-      }
-      if(d.pilot_lat!=null){
-        var pgcj=w2g(d.pilot_lng,d.pilot_lat);
-        if(!d.pilotMarker)d.pilotMarker=L.marker(pgcj,{icon:pilotIcon}).addTo(map).bindPopup('飞行员 '+esc(nv(d.mac,'')));
-        else d.pilotMarker.setLatLng(pgcj);
+        d.marker.setPopupContent(popupHtml(d));
       }
     }
+    // 地图：飞手
+    if(validLatLng(d.pilot_lat,d.pilot_long)){
+      var pgcj=w2g(d.pilot_long,d.pilot_lat);
+      if(!d.pilotMarker){
+        d.pilotMarker=L.marker(pgcj,{icon:pilotIcon}).addTo(map)
+          .bindPopup('飞手位置<br>'+esc(nv(d.mac,'')));
+      } else { d.pilotMarker.setLatLng(pgcj); }
+    }
+    render();
   }
 
   function render(){
-    var list=Object.values(drones);
-    var connColor=connected?'#16a34a':'#94a3b8';
-    var connTxt=connected?'已连接':'未连接';
-    var html='<div class="row"><span><span class="dot" style="background:'+connColor+'"></span>'+connTxt+'</div>';
-    html+='<div class="row"><span>WiFi 管理帧</span><b>'+stats.wifi+'</b></div>';
-    html+='<div class="row"><span>BLE 广播</span><b>'+stats.ble+'</b></div>';
-    html+='<div class="row"><span>最近更新</span><b>'+esc(stats.last||'-')+'</b></div>';
-    html+='<div class="row"><span>在线目标</span><b style="color:#2563eb">'+list.length+'</b></div>';
-    if(list.length===0){
-      html+='<div style="padding:10px 4px;color:#999;font-size:12px">等待 RID 数据…</div>';
-    }else{
-      list.forEach(function(d){
-        var stale=(Date.now()-(d.seen||0))>15000;
-        html+='<div class="item" data-id="'+esc(d.id)+'"><b>'+esc(nv(d.ua_type,'未知'))+'</b> '
-          +(stale?'<small style="color:#e74c3c">●超时</small>':'<small style="color:#16a34a">●在线</small>')
-          +'<br><small>'+esc(nv(d.mac,'-'))+'</small><br>'
-          +'<small>高度 '+(d.height_m!=null?d.height_m+'m':'-')+' · 距离 '+(d.distance_m!=null?d.distance_m+'m':'-')+' · '+(d.freq_mhz?d.freq_mhz+'MHz':'-')+'</small></div>';
-      });
+    var listEl=document.getElementById('list');
+    if(order.length===0){
+      listEl.innerHTML='<div style="color:#94a3b8;padding:8px 2px">暂未收到无人机广播</div>';
+      return;
     }
-    $('list').innerHTML=html;
-    if(mapReady){
-      Array.prototype.forEach.call(document.querySelectorAll('.item'),function(el){
-        el.onclick=function(){
+    var html='';
+    for(var i=0;i<order.length;i++){
+      var d=drones[order[i]];
+      var title=UA_TYPE[d.ua_type]||('未知机型#'+d.ua_type);
+      html+='<div class="item" data-id="'+esc(d.id)+'">';
+      html+='<div class="t"><span>🛸 '+esc(title)+'</span>'+statusBadge(d.status)+'</div>';
+      html+='<div class="meta">';
+      html+='<div class="kv"><span class="k">序列号</span><span class="v">'+esc(nv(d.basic_id,'—'))+'</span></div>';
+      html+='<div class="kv"><span class="k">信号</span><span class="v" style="color:'+rssiColor(d.rssi)+'">'+esc(nv(d.rssi,'—'))+' dBm · '+esc(nv(d.interface,''))+'</span></div>';
+      html+='<div class="kv"><span class="k">飞手↔无人机</span><span class="v dist">'+fmtDist(d.distPilot)+'</span></div>';
+      html+='<div class="kv"><span class="k">手机↔无人机</span><span class="v dist">'+fmtDist(d.distPhone)+'</span></div>';
+      html+='<div class="kv"><span class="k">高度/速度</span><span class="v">'+esc(nv(d.drone_altitude,'—'))+'m · '+esc(nv(d.speed_horizontal,'—'))+'m/s</span></div>';
+      html+='</div></div>';
+    }
+    listEl.innerHTML=html;
+    var items=listEl.querySelectorAll('.item');
+    for(var j=0;j<items.length;j++){
+      items[j].addEventListener('click',(function(el){
+        return function(){
           var dd=drones[el.getAttribute('data-id')];
-          if(dd&&dd.marker)map.openPopup(dd.marker._popup,dd.marker.getLatLng());
+          if(dd&&dd.marker){
+            map.setView(dd.marker.getLatLng(),Math.max(map.getZoom(),15));
+            dd.marker.openPopup();
+          }
         };
-      });
+      })(items[j]));
     }
   }
 
+  // ---------- 串口数据解析（按固件协议逐字段读取，不再用错字段名）----------
   function handleLine(line){
-    if(!line||line.indexOf('{')!==0)return;
-    try{
-      var o=JSON.parse(line);
-      stats.last=new Date().toLocaleTimeString();
-      if(o.type==='drone')upsert(o);
-      else if(o.type==='wifi_debug')stats.wifi=nv(o.mgmt_total,stats.wifi);
-      else if(o.type==='ble_debug')stats.ble=nv(o.adv_total,stats.ble);
-    }catch(e){}
-    render();
+    line=String(line);
+    if(line.charAt(0)!=='{') return;     // 只处理 JSON
+    var o;
+    try{ o=JSON.parse(line); }catch(e){ return; }
+    if(!o||o.type!=='drone'){
+      // boot/wifi_debug/ble_debug 等非目标报文，忽略但不报错
+      return;
+    }
+    // 直接保留固件原始字段名，仅做数值规整；坐标/距离在渲染层处理
+    var d={
+      mac:o.mac, interface:o.interface,
+      rssi:num(o.rssi), channel:o.channel, rate:o.rate, noise_floor:num(o.noise_floor),
+      id_type:num(o.id_type), ua_type:num(o.ua_type), basic_id:o.basic_id,
+      drone_lat:num(o.drone_lat), drone_long:num(o.drone_long),
+      drone_altitude:num(o.drone_altitude), height_agl:num(o.height_agl),
+      speed_horizontal:num(o.speed_horizontal), speed_vertical:num(o.speed_vertical),
+      heading:num(o.heading), status:num(o.status),
+      pilot_lat:num(o.pilot_lat), pilot_long:num(o.pilot_long),
+      area_count:o.area_count, area_radius:o.area_radius,
+      area_ceiling:o.area_ceiling, area_floor:o.area_floor,
+      operator_id:o.operator_id, ts:Date.now()
+    };
+    upsert(d);
   }
 
-  // ===== 按钮处理（最先就绪，挂 window）=====
-  var App={
-    connect:function(){
-      if(!window.AndroidSerial){
-        $('stat').innerHTML='<span style="color:#e74c3c">原生串口桥未就绪，请用 APK 打开本页</span>';
-        return;
-      }
-      if(connected){ try{AndroidSerial.disconnect();}catch(e){} return; }
-      try{
-        AndroidSerial.connect();   // 结果经 onNativeSerialState 异步返回
-        $('stat').textContent='正在请求 USB 权限并连接…';
-      }catch(e){
-        $('stat').innerHTML='<span style="color:#e74c3c">连接失败:'+esc(e.message)+'</span><br>确认 OTG 已接、已授权 USB。';
-      }
-    },
+  // ---------- 本机定位 ----------
+  function refreshPhone(){
+    if(!window.AndroidLocation||!window.AndroidLocation.lastLocation) return;
+    var raw;
+    try{ raw=window.AndroidLocation.lastLocation(); }catch(e){ return; }
+    var p;
+    try{ p=JSON.parse(raw); }catch(e){ return; }
+    if(p&&p.ok){
+      phone={lat:p.lat,lng:p.lng,acc:p.acc,src:p.src};
+      var gcj=w2g(phone.lng,phone.lat);
+      if(!window._phoneMarker){
+        window._phoneMarker=L.marker(gcj,{icon:phoneIcon}).addTo(map).bindPopup('本机位置（观测者）');
+      } else { window._phoneMarker.setLatLng(gcj); }
+      // 重算所有目标的手机距离
+      for(var k in drones){ if(drones.hasOwnProperty(k)){ computeDist(drones[k]); } }
+      render();
+      var accTxt=(phone.acc!=null)?(' ±'+Math.round(phone.acc)+'m'):'';
+      setStat('定位已开启'+accTxt+'，正在实时计算手机↔无人机距离',true);
+    } else if(p&&p.reason==='no_permission'){
+      setStat('定位权限未授予，点上方「开启本机定位」授权',false);
+    }
+  }
+
+  function setStat(msg,ok){
+    var el=document.getElementById('stat');
+    var dot='<span class="dot '+(ok?'ok':'bad')+'"></span>';
+    el.innerHTML=dot+esc(msg);
+  }
+  function setConnUI(isConn){
+    connected=isConn;
+    var btn=document.getElementById('connBtn');
+    btn.textContent=isConn?'⏹ 断开串口':'🔌 连接串口';
+    document.getElementById('stat').innerHTML='<span class="dot '+(isConn?'ok':'bad')+'"></span>'+
+      (isConn?'已连接，等待无人机广播…':'未连接，接 OTG 扫描板后点上方按钮');
+  }
+
+  // ---------- 对外按钮接口 ----------
+  window.App={
     fold:function(){
-      var p=$('panel');
-      var folded=p.classList.toggle('folded');
-      $('foldBtn').textContent=folded?'+':'—';
+      document.getElementById('panel').classList.toggle('folded');
+    },
+    connect:function(){
+      var bridge=window.AndroidSerial;
+      if(!bridge){ setStat('原生串口桥未注入，请重启 APP',false); return; }
+      try{
+        if(bridge.isConnected&&bridge.isConnected()){ bridge.disconnect(); return; }
+        bridge.connect();
+        setStat('正在请求 USB / 打开串口…',true);
+      }catch(e){ setStat('连接调用异常：'+e.message,false); }
     },
     diagnose:function(){
-      var out=$('diagOut');
+      var bridge=window.AndroidSerial;
+      var out=document.getElementById('diagOut');
       out.style.display='block';
-      if(!window.AndroidSerial){
-        out.textContent='原生串口桥未就绪，请用 APK 打开本页（不是浏览器）';
-        return;
-      }
+      if(!bridge){ out.textContent='原生串口桥未注入'; return; }
+      var txt='';
       try{
-        var txt='=== USB 自诊断 '+new Date().toLocaleTimeString()+' ===\n';
-        txt+='[桥对象] window.AndroidSerial: OK\n';
-        txt+='[可用驱动] '+AndroidSerial.availableDrivers()+'\n';
-        txt+='[当前连接] '+(AndroidSerial.isConnected()?'已连接':'未连接')+'\n';
-        txt+='\n----- 原生层扫描（识别/权限/驱动）-----\n';
-        txt+=AndroidSerial.diagnose();
-        txt+='\n\n【判定指引】\n';
-        txt+='· 识别设备数=0：检查 OTG 线/板子供电/USB 是否松动，换线试。\n';
-        txt+='· 有设备但权限=待授权：重新点「连接串口」，手机会弹授权框，勾选允许。\n';
-        txt+='· 有设备有权限但无驱动：把上面 vendorId/productId 发我，加驱动白名单。\n';
-        txt+='· 一切正常仍连不上：把整屏截图发我，并说明扫描板芯片型号。';
-        out.textContent=txt;
-      }catch(e){
-        out.textContent='诊断调用异常：'+e.message;
-      }
-      out.scrollTop=out.scrollHeight;
+        // 设备明细（VID/PID/驱动/授权），桥已提供 driversInfo()
+        if(bridge.driversInfo){
+          var info=bridge.driversInfo();
+          txt+='匹配串口设备：'+info+'\n\n';
+        }
+        txt+='—— 完整诊断 ——\n'+bridge.diagnose();
+      }catch(e){ txt='诊断调用异常：'+e.message; }
+      out.textContent=txt;
+    },
+    locate:function(){
+      if(!window.AndroidLocation){ setStat('定位桥未注入（需新版 APP）',false); return; }
+      refreshPhone();
+      if(locTimer){ clearInterval(locTimer); }
+      locTimer=setInterval(refreshPhone,3000);   // 每3秒刷新本机位置与距离
     }
   };
-  window.App=App;
 
-  // ===== 原生 USB 串口桥回调（MainActivity 注入 window.AndroidSerial）=====
-  window.onNativeSerialLine=function(payload){
-    var line=(typeof payload==='string')?payload:payload.line;
-    handleLine(line);
-  };
-  window.onNativeSerialState=function(payload){
-    connected=!!payload.connected;
-    $('connBtn').textContent=connected?'⏹ 断开':'🔌 连接串口';
-    var msg=payload.message||'';
-    if(msg){
-      var isError=/(失败|未|错误|占用|超时|拒绝|找不到)/.test(msg);
-      var color=connected||!isError?'#2563eb':'#e74c3c';
-      $('stat').innerHTML='<span style="color:'+color+'">'+esc(msg)+'</span>';
+  // ---------- 原生回调（由 SerialJsBridge / MainActivity 注入调用）----------
+  window.onNativeSerialLine=function(line){
+    // 桥可能整行回传，也可能分包；做一层缓冲按 \n 切
+    lineBuf+=String(line);
+    var idx;
+    while((idx=lineBuf.indexOf('\n'))>=0){
+      var one=lineBuf.substring(0,idx);
+      lineBuf=lineBuf.substring(idx+1);
+      if(one) handleLine(one);
     }
-    render();
+    // 单包即完整 JSON（无换行）的兜底
+    if(lineBuf.charAt(0)==='{'&&lineBuf.length>2&&lineBuf.charAt(lineBuf.length-1)==='}'){
+      handleLine(lineBuf); lineBuf='';
+    }
+  };
+  window.onNativeSerialState=function(isConn,msg){
+    setConnUI(!!isConn);
+    if(msg){ setStat(msg,!!isConn); }
   };
 
-  // ===== 地图初始化（独立 try/catch，失败也不影响按钮与列表）=====
+  // ---------- 地图初始化（放最后，地图失败不影响按钮/定位/解析）----------
   try{
     if(!window.L){ throw new Error('Leaflet 库未加载（lib/leaflet.js 缺失）'); }
     makeIcons();
     map=L.map('map',{zoomControl:false}).setView([19.68,109.68],10);
     L.control.zoom({position:'bottomright'}).addTo(map);
-    var street=L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-      {subdomains:'1234',maxZoom:18,attribution:'高德'});
-    var sat=L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',{subdomains:'1234',maxZoom:18});
-    var label=L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}',{subdomains:'1234',maxZoom:18});
-    street.addTo(map);
-    L.control.layers({'街道图':street,'卫星图':L.layerGroup([sat,label])},{position:'bottomright'}).addTo(map);
-    mapReady=true;
+    L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',{
+      subdomains:['1','2','3','4'], maxZoom:18, attribution:'高德地图(GCJ-02)'
+    }).addTo(map);
+    render();
+    // 若已默认授权定位，静默尝试一次
+    if(window.AndroidLocation&&window.AndroidLocation.hasPermission&&window.AndroidLocation.hasPermission()){
+      window.App.locate();
+    }
   }catch(e){
-    mapReady=false;
-    try{
-      $('stat').innerHTML='<span style="color:#e74c3c">⚠️ 地图初始化失败（不影响连接/诊断按钮）:'+esc(e.message)+'</span><br>'+$('stat').innerHTML;
-    }catch(_){}
+    setStat('地图初始化失败：'+e.message+'（按钮与串口仍可用）',false);
   }
-
-  // 首次渲染
-  try{ render(); }catch(e){ window.dispatchEvent(new ErrorEvent('error',{message:'render 失败:'+e.message})); }
 })();
 </script>
 </body>

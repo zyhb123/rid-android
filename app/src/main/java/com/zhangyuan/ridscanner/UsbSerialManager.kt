@@ -54,6 +54,12 @@ class UsbSerialManager(
     // 防重入：正在请求权限/打开过程中忽略重复点击
     @Volatile private var connecting = false
 
+    // 异常断开自动重连（ESP32-S3 USB-Serial-JTAG 偶发踢重枚举 / OTG 抖动）
+    @Volatile private var manualClose = false
+    @Volatile private var retryCount = 0
+    private val maxRetry = 3
+    private val reconnectRunnable = Runnable { tryReconnect() }
+
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -99,6 +105,9 @@ class UsbSerialManager(
 
     fun availableDrivers(): List<UsbSerialDriver> =
         UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+
+    /** 供桥层查询某 USB 设备是否已获授权。 */
+    fun hasPermission(device: UsbDevice): Boolean = usbManager.hasPermission(device)
 
     /**
      * 真机 USB 自诊断：把系统识别到的 USB 设备、vid/pid、驱动匹配、权限状态全量回传。
@@ -203,6 +212,7 @@ class UsbSerialManager(
 
     /** 在 IO 线程打开设备并配置串口，避免主线程阻塞 ANR */
     private fun openDevice(device: UsbDevice) {
+        manualClose = false // 任何主动/插入打开都视为新会话，允许后续自动重连
         connecting = true
         postState(false, "正在打开串口…")
         ioExecutor.execute {
@@ -228,7 +238,15 @@ class UsbSerialManager(
                     return@execute
                 }
                 p.open(conn)
-                p.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                // CDC/JTAG（ESP32-S3 原生 USB）波特率无意义，setParameters 在部分驱动会抛
+                // UnsupportedOperationException；这里容错，失败不致命，避免一打开就断。
+                try {
+                    p.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                } catch (uoe: UnsupportedOperationException) {
+                    Log.w(TAG, "该驱动不支持 setParameters（CDC/JTAG 正常现象），跳过")
+                }
+                // 不主动拉 DTR/RTS：ESP32-S3 USB-Serial-JTAG 的 RTS 跳变会触发芯片复位重枚举，
+                // 这正是“Queueing USB request failed”的高发原因。保持默认电平即可。
 
                 val mgr = SerialInputOutputManager(p, object : SerialInputOutputManager.Listener {
                     override fun onNewData(data: ByteArray) {
@@ -243,6 +261,7 @@ class UsbSerialManager(
                             port = null
                             ioManager = null
                             postState(false, "串口异常断开：${e.javaClass.simpleName} ${e.message ?: ""}")
+                            scheduleReconnect(e)
                         }
                     }
                 })
@@ -254,6 +273,7 @@ class UsbSerialManager(
                 ioManager = mgr
                 connected = true
                 connecting = false
+                retryCount = 0 // 成功连上后重置重连计数
                 Log.i(TAG, "串口已连接 baud=$BAUD vid=${device.vendorId} pid=${device.productId}")
                 postState(true, "已连接 ${drv.javaClass.simpleName} @${BAUD}bps")
             } catch (e: Exception) {
@@ -294,6 +314,8 @@ class UsbSerialManager(
     }
 
     fun disconnect(reason: String = "已断开") {
+        manualClose = true // 用户/系统主动断开，不自动重连
+        mainHandler.removeCallbacks(reconnectRunnable)
         connecting = false
         connected = false
         runCatching { ioManager?.stop() }
@@ -301,5 +323,42 @@ class UsbSerialManager(
         port = null
         synchronized(lineBuffer) { lineBuffer.setLength(0) }
         postState(false, reason)
+    }
+
+    /** 异常断开后安排一次延迟重连；手动断开或超过上限不重连。 */
+    private fun scheduleReconnect(e: Exception) {
+        if (manualClose) return
+        if (retryCount >= maxRetry) {
+            postState(false, "多次重连失败，请拔插 OTG 后手动点连接（${e.javaClass.simpleName}）")
+            return
+        }
+        retryCount++
+        val delayMs = 1200L * retryCount
+        postState(false, "连接中断，${delayMs / 1000}秒后自动重连($retryCount/$maxRetry)…")
+        mainHandler.removeCallbacks(reconnectRunnable)
+        mainHandler.postDelayed(reconnectRunnable, delayMs)
+    }
+
+    private fun tryReconnect() {
+        if (manualClose || connected || connecting) return
+        val drivers = availableDrivers()
+        if (drivers.isEmpty()) {
+            // 设备还没重新枚举出来：递增计数，超限就停，避免无限轮询
+            if (retryCount < maxRetry) {
+                retryCount++
+                mainHandler.postDelayed(reconnectRunnable, 1000L)
+            } else {
+                postState(false, "重连超时：未检测到扫描板，请拔插 OTG 后手动连接")
+            }
+            return
+        }
+        val device = drivers.first().device
+        if (usbManager.hasPermission(device)) {
+            Log.i(TAG, "自动重连尝试 #$retryCount")
+            openDevice(device)
+        } else {
+            // 授权丢了，走正常申请流程
+            connect()
+        }
     }
 }

@@ -1,11 +1,14 @@
 package com.zhangyuan.ridscanner
 
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
@@ -44,12 +47,47 @@ class MainActivity : AppCompatActivity() {
         webView.webChromeClient = WebChromeClient()
         // 注入原生串口桥，替代 navigator.serial
         webView.addJavascriptInterface(SerialJsBridge(serialManager), "AndroidSerial")
+        // 注入定位桥：手机坐标，用于算“手机→无人机/飞手”距离
+        webView.addJavascriptInterface(LocationJsBridge(this), "AndroidLocation")
+
+        // 运行时定位权限（targetSdk 34 必须动态申请）
+        ensureLocationPermission()
 
         if (savedInstanceState == null) {
             webView.loadUrl("file:///android_asset/www/rid_app.html")
         } else {
             webView.restoreState(savedInstanceState)
         }
+    }
+
+    /** 没有定位权限就弹系统授权框；已授权则不动。 */
+    private fun ensureLocationPermission() {
+        val granted = ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                ),
+                RC_LOCATION
+            )
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        // 授权结果由前端下次调 AndroidLocation.lastLocation() 时自然感知，无需额外处理
+    }
+
+    companion object {
+        private const val RC_LOCATION = 1001
     }
 
     /** 页面就绪后：已有已授权串口设备则自动连，未授权则不动（等用户点按钮）。 */
