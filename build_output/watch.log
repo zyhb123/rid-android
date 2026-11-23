@@ -1,0 +1,17 @@
+[watch] start 2026-11-23 08:47:54
+[watch] poll 1 status=in_progress conclusion=      "conclusion": null, run=45090786035
+[watch] poll 2 status=in_progress conclusion=      "conclusion": null, run=45090786035
+[watch] poll 3 status=in_progress conclusion=      "conclusion": null, run=45090786035
+[watch] poll 4 status=in_progress conclusion=      "conclusion": null, run=45090786035
+[watch] poll 5 status=in_progress conclusion=      "conclusion": null, run=45090786035
+[watch] poll 6 status=in_progress conclusion=      "conclusion": null, run=45090786035
+[watch] poll 7 status=in_progress conclusion=      "conclusion": null, run=45090786035
+[watch] poll 8 status=completed conclusion=success run=45090786035
+[watch] done conclusion=success
+[watch] artifact id=14780973235 name=RIDScanner-debug-apk
+total 5688
+drwxr-xr-x 2 admin admin    4096 Nov 23 08:50 .
+drwxr-xr-x 6 admin admin    4096 Nov 23 08:47 ..
+-rw-r--r-- 1 admin admin 5810161 Nov 23 00:49 app-debug.apk
+-rw-r--r-- 1 admin admin     800 Nov 23 08:50 watch.log
+[watch] APK_READY
