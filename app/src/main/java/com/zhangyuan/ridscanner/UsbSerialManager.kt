@@ -162,7 +162,22 @@ class UsbSerialManager(
                 p.open(conn)
                 p.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
 
-                val mgr = SerialInputOutputManager(p) { data -> handleData(data) }
+                val mgr = SerialInputOutputManager(p, object : SerialInputOutputManager.Listener {
+                    override fun onNewData(data: ByteArray) {
+                        handleData(data)
+                    }
+
+                    override fun onRunError(e: Exception) {
+                        Log.e(TAG, "串口 IO 异常，自动断开", e)
+                        mainHandler.post {
+                            connected = false
+                            runCatching { port?.close() }
+                            port = null
+                            ioManager = null
+                            postState(false, "串口异常断开：${e.javaClass.simpleName} ${e.message ?: ""}")
+                        }
+                    }
+                })
                 mgr.readTimeout = 0
                 ioExecutor.execute(mgr)
 
