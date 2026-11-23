@@ -29,9 +29,18 @@
   #stat{font-size:12px;color:#555;line-height:1.6}
   #diagBtn{background:#475569;font-size:12px;padding:7px;margin-bottom:4px}
   #locBtn{background:#0891b2;font-size:12px;padding:7px;margin-bottom:4px}
+  #otaBtn{background:#7c3aed;font-size:12px;padding:7px;margin-bottom:4px}
   #diagOut{display:none;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;line-height:1.5;
     background:#0f172a;color:#e2e8f0;border-radius:6px;padding:6px;margin:4px 0;white-space:pre-wrap;
     word-break:break-all;max-height:42vh;overflow:auto}
+  #otaOut{display:none;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;line-height:1.5;
+    background:#1e1b4b;color:#e0e7ff;border-radius:6px;padding:6px;margin:4px 0;white-space:pre-wrap;
+    word-break:break-all}
+  #rssiDebug{font-size:11px;line-height:1.5;background:#f0f9ff;border:1px solid #bae6fd;
+    border-radius:6px;padding:6px 8px;margin:4px 0;color:#0c4a6e}
+  #rssiDebug .rd-title{font-weight:700;margin-bottom:3px}
+  #rssiDebug .rd-row{display:flex;justify-content:space-between;gap:8px;padding:1px 0}
+  #rssiDebug .rd-row b{font-variant-numeric:tabular-nums}
   .kv{display:flex;justify-content:space-between;gap:8px;padding:1px 0}
   .kv .k{color:#64748b}.kv .v{text-align:right;font-weight:600;word-break:break-all}
   .note{color:#b45309;font-size:10.5px;line-height:1.4;margin-top:4px;background:#fef3c7;padding:4px 6px;border-radius:5px}
@@ -45,6 +54,9 @@
     <button id="connBtn" type="button" onclick="App.connect()">🔌 连接串口</button>
     <button id="diagBtn" type="button" onclick="App.diagnose()">🔍 USB 诊断（连不上先点这个）</button>
     <button id="locBtn" type="button" onclick="App.locate()">📍 开启本机定位（算手机距离）</button>
+    <button id="otaBtn" type="button" onclick="App.checkUpdate()">⬆️ 检查更新（应用内升级）</button>
+    <pre id="otaOut"></pre>
+    <div id="rssiDebug" style="display:none"></div>
     <pre id="diagOut"></pre>
     <div id="stat">未连接，接 OTG 扫描板后点上方按钮</div>
     <div id="list" style="margin-top:6px"></div>
@@ -272,8 +284,11 @@ window.addEventListener('error',function(ev){
     if(line.charAt(0)!=='{') return;     // 只处理 JSON
     var o;
     try{ o=JSON.parse(line); }catch(e){ return; }
-    if(!o||o.type!=='drone'){
-      // boot/wifi_debug/ble_debug 等非目标报文，忽略但不报错
+    if(!o||!o.type) return;
+    // 诊断计数器：板子每 60s 报一次，用来区分“板子聋” vs “飞机没发 RID”
+    if(o.type==='wifi_debug'||o.type==='ble_debug'){ handleDebug(o); return; }
+    if(o.type!=='drone'){
+      // boot/status 等非目标报文，忽略但不报错
       return;
     }
     // 直接保留固件原始字段名，仅做数值规整；坐标/距离在渲染层处理
@@ -293,6 +308,39 @@ window.addEventListener('error',function(ev){
     upsert(d);
   }
 
+  // ---------- 射频诊断计数器（固件每 60s 一帧）----------
+  var dbg={wifi:null,ble:null,ts:0};
+  function nz(v){ return (typeof v==='number'&&isFinite(v))?v:0; }
+  function handleDebug(o){
+    if(o.type==='wifi_debug'){ dbg.wifi=o; } else if(o.type==='ble_debug'){ dbg.ble=o; }
+    dbg.ts=Date.now();
+    renderDebug();
+  }
+  function renderDebug(){
+    var box=document.getElementById('rssiDebug');
+    if(!box) return;
+    var h='<div class="rd-title">📡 板子射频计数（每60秒刷新）</div>';
+    if(dbg.wifi){
+      var w=dbg.wifi;
+      h+='<div style="font-weight:700;margin-top:2px">WiFi（2.4G 监听）</div>';
+      h+='<div class="rd-row"><span>管理帧总数</span><b>'+nz(w.wifi_mgmt_total)+'</b></div>';
+      h+='<div class="rd-row"><span>NAN 命中/解析成功/失败</span><b>'+nz(w.wifi_nan_dest_match)+' / '+nz(w.wifi_nan_parse_ok)+' / '+nz(w.wifi_nan_parse_fail)+'</b></div>';
+      h+='<div class="rd-row"><span>Beacon 总数/含厂商IE/ODID</span><b>'+nz(w.wifi_beacon_total)+' / '+nz(w.wifi_beacon_vendor_ie)+' / '+nz(w.wifi_beacon_odid)+'</b></div>';
+    }
+    if(dbg.ble){
+      var b=dbg.ble;
+      h+='<div style="font-weight:700;margin-top:4px">蓝牙 BLE（被动扫描）</div>';
+      h+='<div class="rd-row"><span>广播帧总数</span><b>'+nz(b.ble_adv_total)+'</b></div>';
+      h+='<div class="rd-row"><span>ODID 总数 / BLE4.2 / BLE5.0</span><b>'+nz(b.ble_odid_total)+' / '+nz(b.ble_42_odid)+' / '+nz(b.ble_50_odid)+'</b></div>';
+    }
+    var alive=((Date.now()-dbg.ts)/1000<70);
+    h+='<div style="margin-top:3px;font-size:10px;color:'+(alive?'#0369a1':'#b91c1c')+'">'+
+       (alive?'● 计数持续更新中':'● 超过70秒未收到计数（检查串口/板子）')+'</div>';
+    h+='<div style="margin-top:2px;font-size:10px;color:#64748b">判读：总数涨但 ODID=0 → 板子正常、附近飞机未发RID；总数恒为0 → 板子天线/射频层面异常</div>';
+    box.innerHTML=h;
+    box.style.display='block';
+  }
+
   // ---------- 本机定位 ----------
   function refreshPhone(){
     if(!window.AndroidLocation||!window.AndroidLocation.lastLocation) return;
@@ -306,6 +354,11 @@ window.addEventListener('error',function(ev){
       if(!window._phoneMarker){
         window._phoneMarker=L.marker(gcj,{icon:phoneIcon}).addTo(map).bindPopup('本机位置（观测者）');
       } else { window._phoneMarker.setLatLng(gcj); }
+      // 首次拿到本机坐标：地图自动飞到“我”头顶并放大到街道级（只自动飞一次，之后不抢视角）
+      if(!window._phoneAutoCentered){
+        window._phoneAutoCentered=true;
+        try{ map.setView(gcj,15,{animate:true}); }catch(e){}
+      }
       // 重算所有目标的手机距离
       for(var k in drones){ if(drones.hasOwnProperty(k)){ computeDist(drones[k]); } }
       render();
@@ -330,6 +383,7 @@ window.addEventListener('error',function(ev){
   }
 
   // ---------- 对外按钮接口 ----------
+  var otaPendingUrl=null;   // 非空表示已发现新版本，再次点击按钮即开始下载
   window.App={
     fold:function(){
       document.getElementById('panel').classList.toggle('folded');
@@ -364,6 +418,22 @@ window.addEventListener('error',function(ev){
       refreshPhone();
       if(locTimer){ clearInterval(locTimer); }
       locTimer=setInterval(refreshPhone,3000);   // 每3秒刷新本机位置与距离
+    },
+    checkUpdate:function(){
+      var bridge=window.AndroidOta;
+      var out=document.getElementById('otaOut');
+      var btn=document.getElementById('otaBtn');
+      if(!bridge){ out.style.display='block'; out.textContent='OTA 桥未注入（需新版 APP）'; return; }
+      if(otaPendingUrl){
+        // 第二次点击：确认下载并调起安装
+        out.style.display='block'; out.textContent='开始下载… 0%';
+        try{ bridge.downloadAndInstall(otaPendingUrl); }
+        catch(e){ out.textContent='下载调用异常：'+e.message; }
+        return;
+      }
+      out.style.display='block'; out.textContent='正在检查更新…';
+      try{ bridge.check(); }
+      catch(e){ out.textContent='检查更新异常：'+e.message; }
     }
   };
 
@@ -387,6 +457,62 @@ window.addEventListener('error',function(ev){
     if(msg){ setStat(msg,!!isConn); }
   };
 
+  // ---------- OTA 回调（由 UpdateManager 经 OtaJsBridge 注入）----------
+  window.onNativeOtaCheck=function(o){
+    var out=document.getElementById('otaOut');
+    var btn=document.getElementById('otaBtn');
+    if(!o||!o.ok){
+      out.style.display='block';
+      out.textContent='检查更新失败：'+((o&&o.error)||'网络或服务不可用（可稍后重试）');
+      return;
+    }
+    if(o.hasUpdate){
+      otaPendingUrl=o.apkUrl||null;
+      var sizeMB=o.apkSize?('（约'+(o.apkSize/1048576).toFixed(1)+'MB）'):'';
+      out.style.display='block';
+      out.textContent='发现新版本 v'+o.latestVersion+sizeMB+'\n当前 v'+o.currentVersion+'\n\n'+
+        (o.releaseNotes||'')+'\n\n再点一次「检查更新」按钮即开始下载，下载完自动弹安装。';
+      btn.textContent='⬇️ 下载并安装 v'+o.latestVersion;
+    }else{
+      otaPendingUrl=null;
+      out.style.display='block';
+      out.textContent='已是最新版（v'+o.currentVersion+'）';
+      btn.textContent='⬆️ 检查更新（应用内升级）';
+    }
+  };
+  window.onNativeOtaProgress=function(o){
+    var out=document.getElementById('otaOut');
+    if(out&&o&&typeof o.percent==='number'){
+      out.style.display='block';
+      out.textContent='下载中… '+o.percent+'%';
+    }
+  };
+  window.onNativeOtaError=function(o){
+    var out=document.getElementById('otaOut');
+    if(out){ out.style.display='block'; out.textContent='升级出错：'+((o&&o.error)||'未知错误'); }
+  };
+  window.onNativeOtaInstall=function(){
+    var out=document.getElementById('otaOut');
+    if(out){ out.style.display='block'; out.textContent='下载完成，已弹出系统安装界面。\n点「安装」即可覆盖，数据不会丢失。'; }
+  };
+
+  // ---------- 本机定位：自动启动（零点击）----------
+  // 原生授权弹窗返回后由 Activity 调此函数；也可被初始化逻辑安全重复调用（幂等）
+  window.autoStartLocation=function(){
+    try{
+      if(!window.AndroidLocation) return;
+      // 已在定时刷新则不重复启动
+      if(locTimer) return;
+      if(window.AndroidLocation.hasPermission && window.AndroidLocation.hasPermission()){
+        window.App.locate();
+      }
+    }catch(e){}
+  };
+  // 定位权限被原生授予后的主动通知（MainActivity.onRequestPermissionsResult 调用）
+  window.onNativeLocationGranted=function(){
+    window.autoStartLocation();
+  };
+
   // ---------- 地图初始化（放最后，地图失败不影响按钮/定位/解析）----------
   try{
     if(!window.L){ throw new Error('Leaflet 库未加载（lib/leaflet.js 缺失）'); }
@@ -397,10 +523,11 @@ window.addEventListener('error',function(ev){
       subdomains:['1','2','3','4'], maxZoom:18, attribution:'高德地图(GCJ-02)'
     }).addTo(map);
     render();
-    // 若已默认授权定位，静默尝试一次
-    if(window.AndroidLocation&&window.AndroidLocation.hasPermission&&window.AndroidLocation.hasPermission()){
-      window.App.locate();
-    }
+    // 启动即尝试自动定位（已授权则立刻飞地图；未授权等原生 onNativeLocationGranted 回调）
+    window.autoStartLocation();
+    // 兑底：部分机型授权回调可能丢失，页面加载 2.5s / 6s 后再静默试一次（已启动则内部幂等返回）
+    setTimeout(function(){ try{window.autoStartLocation();}catch(e){} },2500);
+    setTimeout(function(){ try{window.autoStartLocation();}catch(e){} },6000);
   }catch(e){
     setStat('地图初始化失败：'+e.message+'（按钮与串口仍可用）',false);
   }

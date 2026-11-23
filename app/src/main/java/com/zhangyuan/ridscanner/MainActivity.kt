@@ -15,6 +15,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var serialManager: UsbSerialManager
+    private lateinit var updateManager: UpdateManager
 
     @Volatile private var destroyed = false
 
@@ -49,6 +50,9 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(SerialJsBridge(serialManager), "AndroidSerial")
         // 注入定位桥：手机坐标，用于算“手机→无人机/飞手”距离
         webView.addJavascriptInterface(LocationJsBridge(this), "AndroidLocation")
+        // 注入 OTA 桥：应用内检查更新/下载/覆盖安装
+        updateManager = UpdateManager(this, webView)
+        webView.addJavascriptInterface(OtaJsBridge(updateManager), "AndroidOta")
 
         // 运行时定位权限（targetSdk 34 必须动态申请）
         ensureLocationPermission()
@@ -83,7 +87,19 @@ class MainActivity : AppCompatActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        // 授权结果由前端下次调 AndroidLocation.lastLocation() 时自然感知，无需额外处理
+        if (requestCode == RC_LOCATION) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (granted && !destroyed) {
+                // 授权通过：主动通知网页立刻自动定位并飞地图（修复原先回调为空、只能手动点按钮的问题）
+                webView.post {
+                    webView.evaluateJavascript(
+                        "try{window.onNativeLocationGranted&&window.onNativeLocationGranted();}catch(e){}",
+                        null
+                    )
+                }
+            }
+        }
     }
 
     companion object {

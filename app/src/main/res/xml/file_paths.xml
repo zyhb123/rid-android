@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- OTA 下载目录：app 外部私有存储 files/update，系统安装器凭临时 Uri 授权读取 -->
+    <external-files-path name="update_files" path="update/" />
+    <files-path name="internal_update" path="update/" />
+    <cache-path name="cache_update" path="update/" />
+</paths>
