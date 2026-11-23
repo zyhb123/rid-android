@@ -100,6 +100,74 @@ class UsbSerialManager(
     fun availableDrivers(): List<UsbSerialDriver> =
         UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
 
+    /**
+     * 真机 USB 自诊断：把系统识别到的 USB 设备、vid/pid、驱动匹配、权限状态全量回传。
+     * 用于定位“点连接没反应/连不上”到底卡在哪一层，不依赖 logcat。
+     */
+    fun diagnose(): String {
+        val sb = StringBuilder()
+        try {
+            // 1) 系统层面识别到的全部 USB 设备（不管是不是串口）
+            val rawDevices = usbManager.deviceList
+            sb.append("① 系统识别 USB 设备数：").append(rawDevices.size).append("\n")
+            if (rawDevices.isEmpty()) {
+                sb.append("   ⚠ 系统一个 USB 设备都没看到\n")
+                sb.append("   → 问题在硬件层：OTG 线/转接头、手机 OTG 开关、板子供电\n")
+            } else {
+                for ((name, dev) in rawDevices) {
+                    val vid = dev.vendorId
+                    val pid = dev.productId
+                    val cls = dev.deviceClass
+                    val hasPerm = usbManager.hasPermission(dev)
+                    sb.append("   · ").append(dev.deviceName ?: name)
+                      .append(" vid=0x").append(String.format("%04X", vid))
+                      .append(" pid=0x").append(String.format("%04X", pid))
+                      .append(" class=").append(cls)
+                      .append(if (hasPerm) " [已授权]" else " [未授权]")
+                      .append("\n")
+                }
+            }
+
+            // 2) usb-serial 库能匹配上驱动的设备
+            val drivers = availableDrivers()
+            sb.append("② 匹配到串口驱动的设备：").append(drivers.size).append("\n")
+            if (drivers.isEmpty() && rawDevices.isNotEmpty()) {
+                sb.append("   ⚠ 系统看到设备但无串口驱动匹配\n")
+                sb.append("   → 芯片不在 CDC/CH340/CP210x/FTDI/PL2303 之列，需补驱动或确认芯片型号\n")
+            }
+            for (d in drivers) {
+                val dev = d.device
+                sb.append("   · ").append(d.javaClass.simpleName)
+                  .append(" 端口数=").append(d.ports.size)
+                  .append(" vid=0x").append(String.format("%04X", dev.vendorId))
+                  .append(" pid=0x").append(String.format("%04X", dev.productId))
+                  .append(if (usbManager.hasPermission(dev)) " [已授权]" else " [未授权]")
+                  .append("\n")
+            }
+
+            // 3) 当前连接状态
+            sb.append("③ 连接状态：")
+              .append(if (connected) "已连接" else "未连接")
+              .append("，忙=").append(connecting)
+              .append("，波特率=").append(BAUD).append("\n")
+
+            // 4) 结论与下一步
+            sb.append("④ 判定：")
+            when {
+                rawDevices.isEmpty() -> sb.append("硬件层未识别，先换 OTG 线/开手机 OTG/查板子供电")
+                drivers.isEmpty() -> sb.append("设备被识别但非已知串口芯片，截图发我补驱动")
+                drivers.any { !usbManager.hasPermission(it.device) } ->
+                    sb.append("驱动匹配但未授权，点“连接串口”应弹权限框，不弹则是权限回调异常")
+                !connected -> sb.append("设备+驱动+权限都就绪但没连上，问题在打开/参数设置，看红字报错")
+                else -> sb.append("链路正常，若仍无数据则是板端协议/波特率问题")
+            }
+        } catch (e: Exception) {
+            sb.append("诊断自身异常：").append(e.javaClass.simpleName).append(" ").append(e.message)
+            Log.e(TAG, "diagnose 异常", e)
+        }
+        return sb.toString().trim()
+    }
+
     /** 由网页按钮调用：枚举 -> 有权限直接开，没权限申请 */
     fun connect() {
         if (connected) {

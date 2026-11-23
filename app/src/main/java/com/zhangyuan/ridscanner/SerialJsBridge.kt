@@ -33,4 +33,7 @@ class SerialJsBridge(
 
     @JavascriptInterface
     fun deviceCount(): Int = manager.availableDrivers().size
+
+    @JavascriptInterface
+    fun diagnose(): String = manager.diagnose()
 }

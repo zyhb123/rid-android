@@ -24,6 +24,10 @@
   button{width:100%;padding:9px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;font-weight:600;margin-bottom:6px}
   button:disabled{background:#94a3b8}
   #stat{font-size:12px;color:#555;line-height:1.6}
+  #diagBtn{background:#475569;font-size:12px;padding:7px;margin-bottom:4px}
+  #diagOut{display:none;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;line-height:1.5;
+    background:#0f172a;color:#e2e8f0;border-radius:6px;padding:6px;margin:4px 0;white-space:pre-wrap;
+    word-break:break-all;max-height:38vh;overflow:auto}
   .leaflet-popup-content{font-size:12px;line-height:1.55}
 </style>
 </head>
@@ -32,6 +36,8 @@
   <h3>🛰 RID 监测 <button id="foldBtn" type="button">—</button></h3>
   <div id="body">
     <button id="connBtn">🔌 连接串口</button>
+    <button id="diagBtn" type="button">🔍 USB 诊断（连不上先点这个）</button>
+    <pre id="diagOut"></pre>
     <div id="stat">未连接，接 OTG 扫描板后点上方按钮</div>
     <div id="list" style="margin-top:6px"></div>
   </div>
@@ -164,6 +170,24 @@ document.getElementById('foldBtn').onclick=function(){
   const p=document.getElementById('panel');
   const folded=p.classList.toggle('folded');
   this.textContent=folded?'+':'—';
+};
+
+// ===== USB 自诊断：把系统级识别/驱动/权限状态打出来，截图即可定位 =====
+document.getElementById('diagBtn').onclick=function(){
+  const out=document.getElementById('diagOut');
+  out.style.display='block';
+  if(!window.AndroidSerial){
+    out.textContent='原生串口桥未就绪，请用 APK 打开本页（不是浏览器）';
+    return;
+  }
+  try{
+    out.textContent='诊断中…';
+    const r=AndroidSerial.diagnose();
+    out.textContent=r||'(空结果)';
+  }catch(e){
+    out.textContent='诊断调用异常：'+e.message;
+  }
+  out.scrollTop=out.scrollHeight;
 };
 render();
 </script>
