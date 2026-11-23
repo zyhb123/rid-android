@@ -22,7 +22,11 @@ import java.util.concurrent.Executors
  * 走安卓 USB Host API + usb-serial-for-android，
  * 兼容 ESP32-S3 原生 CDC、CH340、CP210x、FTDI、PL2303。
  *
- * 读到的数据按 '\n' 切行，通过 onLine 回调回传（已在主线程）。
+ * v2 加固：
+ * - 打开/参数设置移到 IO 线程，杜绝主线程 USB 阻塞导致 ANR/闪退
+ * - 任何失败都把原因回传 JS 面板（不只 toast），按钮状态可复位
+ * - connect 防重入；数据行 trim 后再判 JSON，容忍前导空白
+ * - 插入设备且已有权限时自动连接
  */
 class UsbSerialManager(
     private val context: Context,
@@ -47,25 +51,43 @@ class UsbSerialManager(
     @Volatile var connected = false
         private set
 
+    // 防重入：正在请求权限/打开过程中忽略重复点击
+    @Volatile private var connecting = false
+
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
-            if (intent?.action == ACTION_USB_PERMISSION) {
-                val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                if (granted && device != null) {
-                    openDevice(device)
-                } else {
-                    onState(false, "未授予 USB 权限")
+            when (intent?.action) {
+                ACTION_USB_PERMISSION -> {
+                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    connecting = false
+                    if (granted && device != null) {
+                        openDevice(device)
+                    } else {
+                        postState(false, "未授予 USB 权限：请在弹窗里点“确定/允许”")
+                    }
                 }
-            } else if (intent?.action == UsbManager.ACTION_USB_DEVICE_DETACHED) {
-                disconnect("设备已拔出")
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                    Log.i(TAG, "USB 设备插入，尝试自动连接")
+                    val dev = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    if (dev != null && !connected && !connecting) {
+                        if (usbManager.hasPermission(dev)) openDevice(dev) else connect()
+                    }
+                }
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    Log.i(TAG, "USB 设备拔出")
+                    if (connected) disconnect("设备已拔出")
+                }
             }
         }
     }
 
     fun register() {
-        val filter = IntentFilter(ACTION_USB_PERMISSION)
-        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        val filter = IntentFilter().apply {
+            addAction(ACTION_USB_PERMISSION)
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -73,70 +95,97 @@ class UsbSerialManager(
         }
     }
 
-    fun unregister() {
-        runCatching { context.unregisterReceiver(usbReceiver) }
-    }
+    fun unregister() = runCatching { context.unregisterReceiver(usbReceiver) }
 
-    /** 返回当前可用的串口设备名列表（供 JS 侧展示/选择，这里默认连第一个）。 */
     fun availableDrivers(): List<UsbSerialDriver> =
         UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
 
-    /** 发起连接：有权限直接开，没权限先申请。 */
+    /** 由网页按钮调用：枚举 -> 有权限直接开，没权限申请 */
     fun connect() {
-        val drivers = availableDrivers()
-        if (drivers.isEmpty()) {
-            onState(false, "没发现 USB 串口设备，确认 OTG 已接、板子已上电")
+        if (connected) {
+            postState(true, "已连接，无需重复操作")
             return
         }
-        val drv = drivers.first()
-        driver = drv
-        val device = drv.device
+        if (connecting) {
+            Log.i(TAG, "正在连接中，忽略重复点击")
+            return
+        }
+        val drivers = availableDrivers()
+        if (drivers.isEmpty()) {
+            // 关键修复：无设备也要明确回传面板，不能只 toast
+            postState(false, "未发现串口设备：请确认 OTG 已插牢、扫描板已上电")
+            return
+        }
+        val first = drivers.first()
+        val device = first.device
         if (!usbManager.hasPermission(device)) {
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                PendingIntent.FLAG_MUTABLE else 0
-            val intent = PendingIntent.getBroadcast(
-                context, 0, Intent(ACTION_USB_PERMISSION).setPackage(context.packageName), flags
-            )
-            usbManager.requestPermission(device, intent)
+            connecting = true
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val pi = PendingIntent.getBroadcast(context, 0, Intent(ACTION_USB_PERMISSION), flags)
+            usbManager.requestPermission(device, pi)
+            postState(false, "请在手机弹窗里允许 USB 权限…")
             return
         }
         openDevice(device)
     }
 
+    /** 在 IO 线程打开设备并配置串口，避免主线程阻塞 ANR */
     private fun openDevice(device: UsbDevice) {
-        try {
-            val drv = driver ?: availableDrivers().firstOrNull { it.device.deviceId == device.deviceId }
-            ?: run { onState(false, "找不到驱动"); return }
-            val connection = usbManager.openDevice(device)
-                ?: run { onState(false, "打开 USB 设备失败"); return }
-            val p = drv.ports.firstOrNull()
-                ?: run { onState(false, "设备没有可用串口端口"); return }
-            p.open(connection)
-            p.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-            // ESP32-S3 CDC 流控关掉，DTR/RTS 拉高确保芯片运行
-            runCatching { p.setDTR(true); p.setRTS(true) }
-            port = p
+        connecting = true
+        postState(false, "正在打开串口…")
+        ioExecutor.execute {
+            try {
+                val drv = availableDrivers().firstOrNull { it.device.deviceId == device.deviceId }
+                    ?: UsbSerialProber.getDefaultProber().probeDevice(device)
+                    ?: run {
+                        postState(false, "找不到该设备的串口驱动")
+                        connecting = false
+                        return@execute
+                    }
+                val p = drv.ports.firstOrNull()
+                if (p == null) {
+                    postState(false, "该设备没有可用串口端口")
+                    connecting = false
+                    return@execute
+                }
 
-            val mgr = SerialInputOutputManager(p, object : SerialInputOutputManager.Listener {
-                override fun onNewData(data: ByteArray) {
-                    handleData(data)
+                val conn = usbManager.openDevice(device)
+                if (conn == null) {
+                    postState(false, "打开 USB 连接失败：可能被其它应用占用，请重插后再试")
+                    connecting = false
+                    return@execute
                 }
-                override fun onRunError(e: Exception) {
-                    Log.e(TAG, "IO error", e)
-                    mainHandler.post { disconnect("串口异常：${e.message}") }
-                }
-            })
-            ioManager = mgr
-            ioExecutor.submit(mgr)
-            connected = true
-            onState(true, "已连接 ${device.deviceName} @${BAUD}")
-        } catch (e: Exception) {
-            Log.e(TAG, "openDevice failed", e)
-            onState(false, "打开失败：${e.message}")
-            runCatching { port?.close() }
-            port = null
-            connected = false
+                p.open(conn)
+                p.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+
+                val mgr = SerialInputOutputManager(p) { data -> handleData(data) }
+                mgr.readTimeout = 0
+                ioExecutor.execute(mgr)
+
+                driver = drv
+                port = p
+                ioManager = mgr
+                connected = true
+                connecting = false
+                Log.i(TAG, "串口已连接 baud=$BAUD vid=${device.vendorId} pid=${device.productId}")
+                postState(true, "已连接 ${drv.javaClass.simpleName} @${BAUD}bps")
+            } catch (e: Exception) {
+                Log.e(TAG, "openDevice 失败", e)
+                runCatching { port?.close() }
+                port = null
+                connected = false
+                connecting = false
+                postState(false, "打开串口失败：${e.javaClass.simpleName} ${e.message ?: ""}")
+            }
         }
+    }
+
+    private fun postState(ok: Boolean, msg: String) {
+        mainHandler.post { onState(ok, msg) }
     }
 
     private fun handleData(data: ByteArray) {
@@ -152,20 +201,22 @@ class UsbSerialManager(
                 idx = lineBuffer.indexOf('\n')
             }
         }
-        // 切回主线程喂给 WebView
         mainHandler.post {
             for (l in lines) {
+                // 容错：去空白后是 JSON 对象才喂给协议解析，其余忽略但不丢日志线索
                 if (l.startsWith("{")) onLine(l)
+                else Log.d(TAG, "忽略非JSON行: $l")
             }
         }
     }
 
     fun disconnect(reason: String = "已断开") {
+        connecting = false
         connected = false
         runCatching { ioManager?.stop() }
         runCatching { port?.close() }
         port = null
         synchronized(lineBuffer) { lineBuffer.setLength(0) }
-        mainHandler.post { onState(false, reason) }
+        postState(false, reason)
     }
 }

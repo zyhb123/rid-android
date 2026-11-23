@@ -137,8 +137,12 @@ window.onNativeSerialLine=function(payload){
 window.onNativeSerialState=function(payload){
  connected=!!payload.connected;
  $('connBtn').textContent=connected?'⏹ 断开':'🔌 连接串口';
- if(!connected && payload.message){
-   $('stat').innerHTML='<span style="color:#e74c3c">'+esc(payload.message)+'</span>';
+ const msg=payload.message||'';
+ if(msg){
+   // 进行中/正常提示用蓝色，真正失败才报红
+   const isError=/(失败|未|错误|占用|超时|拒绝|找不到)/.test(msg);
+   const color=connected||!isError?'#2563eb':'#e74c3c';
+   $('stat').innerHTML='<span style="color:'+color+'">'+esc(msg)+'</span>';
  }
  render();
 };

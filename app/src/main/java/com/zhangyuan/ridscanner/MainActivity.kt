@@ -13,6 +13,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var serialManager: UsbSerialManager
 
+    @Volatile private var destroyed = false
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,7 +34,13 @@ class MainActivity : AppCompatActivity() {
             allowFileAccess = true
             mediaPlaybackRequiresUserGesture = false
         }
-        webView.webViewClient = WebViewClient()
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                // 启动时若扫描板已插且已授权，自动连接，省一次点击
+                autoConnectIfReady()
+            }
+        }
         webView.webChromeClient = WebChromeClient()
         // 注入原生串口桥，替代 navigator.serial
         webView.addJavascriptInterface(SerialJsBridge(serialManager), "AndroidSerial")
@@ -44,11 +52,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 页面就绪后：已有已授权串口设备则自动连，未授权则不动（等用户点按钮）。 */
+    private fun autoConnectIfReady() {
+        try {
+            val drivers = serialManager.availableDrivers()
+            if (drivers.isEmpty()) return
+            val device = drivers.first().device
+            val usbManager = getSystemService(USB_SERVICE) as android.hardware.usb.UsbManager
+            if (usbManager.hasPermission(device) && !serialManager.connected) {
+                serialManager.connect()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "autoConnect skip: ${e.message}")
+        }
+    }
+
     /** 把收到的一行 JSON 安全转义后注入页面全局回调。 */
     private fun injectLine(line: String) {
+        if (destroyed) return
         val payload = JSONObject().put("line", line).toString()
         webView.post {
-            webView.evaluateJavascript(
+            if (!destroyed) webView.evaluateJavascript(
                 "window.onNativeSerialLine && window.onNativeSerialLine($payload);",
                 null
             )
@@ -56,12 +80,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun injectState(connected: Boolean, msg: String) {
+        if (destroyed) return
         val payload = JSONObject()
             .put("connected", connected)
             .put("message", msg)
             .toString()
         webView.post {
-            webView.evaluateJavascript(
+            if (!destroyed) webView.evaluateJavascript(
                 "window.onNativeSerialState && window.onNativeSerialState($payload);",
                 null
             )
@@ -74,6 +99,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         serialManager.unregister()
         serialManager.disconnect("页面销毁")
         webView.destroy()
