@@ -49,6 +49,15 @@
   .kv .k{color:#64748b}.kv .v{text-align:right;font-weight:600;word-break:break-all}
   .note{color:#b45309;font-size:10.5px;line-height:1.4;margin-top:4px;background:#fef3c7;padding:4px 6px;border-radius:5px}
   .leaflet-popup-content{font-size:12px;line-height:1.55}
+  /* ===== 高德风本机定位：蓝色脉冲点 + 精度圈 ===== */
+  .my-loc{position:relative;width:26px;height:26px}
+  .my-loc-dot{position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;
+    border-radius:50%;background:#1890ff;border:2.5px solid #fff;box-sizing:border-box;
+    box-shadow:0 0 5px rgba(0,0,0,.35);z-index:2}
+  .my-loc-pulse{position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;
+    border-radius:50%;background:rgba(24,144,255,.38);z-index:1;animation:mylocpulse 2.2s ease-out infinite}
+  @keyframes mylocpulse{0%{transform:scale(1);opacity:.75}70%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}
+  .loc-follow{background:#0f7ae5 !important;color:#fff !important}
 </style>
 </head>
 <body>
@@ -57,7 +66,7 @@
   <div id="body">
     <button id="connBtn" type="button" onclick="App.connect()">🔌 连接串口</button>
     <button id="diagBtn" type="button" onclick="App.diagnose()">🔍 USB 诊断（连不上先点这个）</button>
-    <button id="locBtn" type="button" onclick="App.locate()">📍 开启本机定位（算手机距离）</button>
+    <button id="locBtn" type="button" onclick="App.locate()">📍 定位到我（授权并飞回当前位置）</button>
     <button id="otaBtn" type="button" onclick="App.checkUpdate()">⬆️ 检查更新（应用内升级）</button>
     <pre id="otaOut"></pre>
     <div id="rssiDebug" style="display:none"></div>
@@ -67,7 +76,7 @@
   </div>
 </div>
 <div id="map"></div>
-<button id="recenterBtn" type="button" onclick="App.recenter()">📍 回到我位置</button>
+<button id="recenterBtn" type="button" onclick="App.locate()">📍 回到我位置</button>
 <script>
 // ====================================================================
 // 全局错误捕获：老 WebView 不兼容/任何 JS 报错直接显示到页面，截图即可定位
@@ -187,8 +196,8 @@ window.addEventListener('error',function(ev){
       '<div style="font-size:22px;line-height:26px;text-align:center;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🛸</div>'});
     pilotIcon=L.divIcon({className:'',iconSize:[24,24],iconAnchor:[12,12],html:
       '<div style="font-size:20px;line-height:24px;text-align:center;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🧑‍✈️</div>'});
-    phoneIcon=L.divIcon({className:'',iconSize:[24,24],iconAnchor:[12,12],html:
-      '<div style="font-size:20px;line-height:24px;text-align:center;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">📍</div>'});
+    phoneIcon=L.divIcon({className:'',iconSize:[26,26],iconAnchor:[13,13],html:
+      '<div class="my-loc"><div class="my-loc-pulse"></div><div class="my-loc-dot"></div></div>'});
   }
 
   // ---------- 距离汇总（每条无人机实时计算）----------
@@ -359,6 +368,14 @@ window.addEventListener('error',function(ev){
       if(!window._phoneMarker){
         window._phoneMarker=L.marker(gcj,{icon:phoneIcon}).addTo(map).bindPopup('本机位置（观测者）');
       } else { window._phoneMarker.setLatLng(gcj); }
+      // 高德风精度圈：半透明蓝圆，半径=定位精度（米）；无精度值时隐藏
+      var accM=(phone.acc&&phone.acc>0&&phone.acc<2000)?phone.acc:null;
+      if(accM){
+        if(!window._phoneAccCircle){
+          window._phoneAccCircle=L.circle(gcj,{radius:accM,color:'#1890ff',weight:1,
+            fillColor:'#1890ff',fillOpacity:.12,opacity:.55}).addTo(map);
+        } else { window._phoneAccCircle.setLatLng(gcj); window._phoneAccCircle.setRadius(accM); }
+      }
       // 首次拿到本机坐标：地图自动飞到“我”头顶并放大到街道级（只自动飞一次，之后不抢视角）
       if(!window._phoneAutoCentered){
         window._phoneAutoCentered=true;
@@ -370,7 +387,7 @@ window.addEventListener('error',function(ev){
       var accTxt=(phone.acc!=null)?(' ±'+Math.round(phone.acc)+'m'):'';
       setStat('定位已开启'+accTxt+'，正在实时计算手机↔无人机距离',true);
     } else if(p&&p.reason==='no_permission'){
-      setStat('定位权限未授予，点上方「开启本机定位」授权',false);
+      setStat('定位权限未授予，点上方「定位到我」在弹窗选允许',false);
     }
   }
 
@@ -418,11 +435,31 @@ window.addEventListener('error',function(ev){
       }catch(e){ txt='诊断调用异常：'+e.message; }
       out.textContent=txt;
     },
+    /* 高德风定位按钮：无权限→主动弹授权框；有权限→催一次新鲜定位并飞到我。
+       修复旧版点了没反应（静默失败）。 */
     locate:function(){
       if(!window.AndroidLocation){ setStat('定位桥未注入（需新版 APP）',false); return; }
+      var hasPerm=false;
+      try{ hasPerm=window.AndroidLocation.hasPermission&&window.AndroidLocation.hasPermission(); }catch(e){}
+      if(!hasPerm){
+        // 关键修复：无权限时不再静默，主动拉起系统授权弹窗
+        try{ if(window.AndroidLocation.requestPermission) window.AndroidLocation.requestPermission(); }catch(e){}
+        setStat('正在请求定位权限，请在弹窗点“允许”',true);
+        return;
+      }
+      // 已授权：催一次新鲜定位（解决 getLastKnownLocation 为空/旧值），再立即读一次
+      try{ if(window.AndroidLocation.requestSingleFix) window.AndroidLocation.requestSingleFix(); }catch(e){}
       refreshPhone();
       if(locTimer){ clearInterval(locTimer); }
-      locTimer=setInterval(refreshPhone,3000);   // 每3秒刷新本机位置与距离
+      locTimer=setInterval(refreshPhone,3000);
+      // 无论是否已有坐标，都把视角拉回我（高德定位按钮手感）
+      var m=window._phoneMarker;
+      if(m&&m.getLatLng){
+        try{ map.setView(m.getLatLng(),16,{animate:true}); m.openPopup(); }catch(e){}
+        setStat('已定位到你当前位置，正在持续刷新',true);
+      } else {
+        setStat('正在获取卫星定位，请在开阔处稍候 2~5 秒再点一次',false);
+      }
     },
     // 一键回到我的实时位置（地图被拖远后快速飞回）
     recenter:function(){
@@ -435,7 +472,7 @@ window.addEventListener('error',function(ev){
           if(window.AndroidLocation.hasPermission && window.AndroidLocation.hasPermission()){
             window.App.locate();
           } else {
-            setStat('定位权限未授予，请先点「开启本机定位」授权',false);
+            setStat('定位权限未授予，请先点「定位到我」授权',false);
             return;
           }
         }

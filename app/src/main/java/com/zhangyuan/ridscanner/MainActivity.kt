@@ -49,7 +49,11 @@ class MainActivity : AppCompatActivity() {
         // 注入原生串口桥，替代 navigator.serial
         webView.addJavascriptInterface(SerialJsBridge(serialManager), "AndroidSerial")
         // 注入定位桥：手机坐标，用于算“手机→无人机/飞手”距离
-        webView.addJavascriptInterface(LocationJsBridge(this), "AndroidLocation")
+        LocationJsBridge(this).also { bridge ->
+            // 让网页按钮能主动弹系统授权框（修复无权限时点“开启定位”无反应）
+            bridge.permissionRequester = { ensureLocationPermission() }
+            webView.addJavascriptInterface(bridge, "AndroidLocation")
+        }
         // 注入 OTA 桥：应用内检查更新/下载/覆盖安装
         updateManager = UpdateManager(this, webView)
         webView.addJavascriptInterface(OtaJsBridge(updateManager), "AndroidOta")
