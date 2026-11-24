@@ -13,8 +13,8 @@
     color:#0c4a6e;background:#fff;border:1px solid #cbd5e1;border-radius:22px;box-shadow:0 2px 8px rgba(15,23,42,.25);
     cursor:pointer;white-space:nowrap}
   #recenterBtn:active{background:#e0f2fe}
-  #panel{position:absolute;z-index:1000;top:8px;left:8px;width:min(72vw,300px);max-height:74vh;overflow:auto;
-    background:rgba(255,255,255,.96);border-radius:10px;padding:8px 10px;box-shadow:0 2px 12px rgba(0,0,0,.25);font-size:12px;transition:width .2s}
+  #panel{position:absolute;z-index:1000;top:8px;left:8px;width:min(64vw,268px);max-height:74vh;overflow:auto;
+    background:rgba(255,255,255,.96);border-radius:10px;padding:7px 9px;box-shadow:0 2px 12px rgba(0,0,0,.25);font-size:12px;transition:width .2s}
   #panel h3{margin:0 0 6px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
   #foldBtn{background:transparent;color:#2563eb;box-shadow:none;width:auto;padding:2px 6px;font-size:16px;font-weight:700;margin:0;line-height:1}
   #panel.folded{width:auto;max-height:none;overflow:visible}
@@ -28,12 +28,15 @@
   .item .dist{color:#b45309;font-weight:700}
   .badge{display:inline-block;padding:1px 6px;border-radius:9px;font-size:10.5px;font-weight:600;color:#fff}
   .b-ground{background:#64748b}.b-air{background:#16a34a}.b-emg{background:#dc2626}.b-fault{background:#ea580c}.b-unk{background:#94a3b8}
-  button{width:100%;padding:9px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;font-weight:600;margin-bottom:6px}
+  button{width:100%;padding:10px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;font-weight:600;margin-bottom:6px}
   button:disabled{background:#94a3b8}
   #stat{font-size:12px;color:#555;line-height:1.6}
-  #diagBtn{background:#475569;font-size:12px;padding:7px;margin-bottom:4px}
-  #locBtn{background:#0891b2;font-size:12px;padding:7px;margin-bottom:4px}
-  #otaBtn{background:#7c3aed;font-size:12px;padding:7px;margin-bottom:4px}
+  #connBtn{margin-bottom:8px;box-shadow:0 2px 6px rgba(37,99,235,.3)}
+  .btn-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px}
+  .btn-grid button{background:#f1f5f9;color:#334155;font-size:12px;font-weight:500;padding:8px 4px;margin:0;
+    border:1px solid #e2e8f0;box-shadow:none}
+  .btn-grid button:active{background:#e2e8f0}
+  #otaBtn{grid-column:1 / -1}
   #diagOut{display:none;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;line-height:1.5;
     background:#0f172a;color:#e2e8f0;border-radius:6px;padding:6px;margin:4px 0;white-space:pre-wrap;
     word-break:break-all;max-height:42vh;overflow:auto}
@@ -65,9 +68,11 @@
   <h3>🛰 RID 监测 <button id="foldBtn" type="button" onclick="App.fold()">—</button></h3>
   <div id="body">
     <button id="connBtn" type="button" onclick="App.connect()">🔌 连接串口</button>
-    <button id="diagBtn" type="button" onclick="App.diagnose()">🔍 USB 诊断（连不上先点这个）</button>
-    <button id="locBtn" type="button" onclick="App.locate()">📍 定位到我（授权并飞回当前位置）</button>
-    <button id="otaBtn" type="button" onclick="App.checkUpdate()">⬆️ 检查更新（应用内升级）</button>
+    <div class="btn-grid">
+      <button id="diagBtn" type="button" onclick="App.diagnose()">🔍 USB诊断</button>
+      <button id="locBtn" type="button" onclick="App.locate()">📍 定位到我</button>
+      <button id="otaBtn" type="button" onclick="App.checkUpdate()">⬆️ 检查更新</button>
+    </div>
     <pre id="otaOut"></pre>
     <div id="rssiDebug" style="display:none"></div>
     <pre id="diagOut"></pre>
@@ -300,7 +305,8 @@ window.addEventListener('error',function(ev){
       html+='<div class="kv"><span class="k">信号</span><span class="v" style="color:'+rssiColor(d.rssi)+'">'+esc(nv(d.rssi,'—'))+' dBm · '+esc(nv(d.interface,''))+'</span></div>';
       html+='<div class="kv"><span class="k">飞手↔无人机</span><span class="v dist">'+fmtDist(d.distPilot)+'</span></div>';
       html+='<div class="kv"><span class="k">手机↔无人机</span><span class="v dist">'+fmtDist(d.distPhone)+'</span></div>';
-      html+='<div class="kv"><span class="k">高度/速度</span><span class="v">'+esc(nv(d.drone_altitude,'—'))+'m · '+esc(nv(d.speed_horizontal,'—'))+'m/s</span></div>';
+      html+='<div class="kv"><span class="k">飞行高度</span><span class="v">海拔 '+esc(nv(d.drone_altitude,'—'))+' m · 离地 '+esc(nv(d.height_agl,'—'))+' m</span></div>';
+      html+='<div class="kv"><span class="k">速度</span><span class="v">水平 '+esc(nv(d.speed_horizontal,'—'))+' m/s · 垂直 '+esc(nv(d.speed_vertical,'—'))+' m/s</span></div>';
       if(validLatLng(d.drone_lat,d.drone_long)){
         html+='<div class="kv"><span class="k">飞机坐标</span><span class="v" style="font-family:monospace;font-size:11px">'+num(d.drone_lat).toFixed(6)+', '+num(d.drone_long).toFixed(6)+'</span></div>';
       }
