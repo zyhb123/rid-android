@@ -21,6 +21,8 @@
   #mapTools #locateBtn.locating{background:#e6f4ff;box-shadow:0 0 0 2px #1890ff,0 2px 10px rgba(24,144,255,.4)}
   #mapTools #airspaceBtn{font-size:13px;font-weight:600;color:#0c4a6e}
   #mapTools #airspaceBtn.on{background:#fff1f0;color:#cf1322;box-shadow:0 0 0 2px #ff7875,0 2px 10px rgba(207,19,34,.35)}
+  #mapTools #airFitBtn{color:#0369a1;font-size:19px;line-height:1}
+  #mapTools #airFitBtn:active{background:#e0f2fe}
   /* 空域图例（左下角，仅开启空域图层时显示） */
   #airLegend{position:absolute;z-index:1000;left:12px;bottom:14px;display:none;background:rgba(255,255,255,.94);
     border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.7;box-shadow:0 2px 10px rgba(15,23,42,.25);color:#1f2937}
@@ -101,6 +103,7 @@
 <div id="mapTools">
   <button id="layerBtn" type="button" onclick="App.toggleLayer()" title="切换图层">路网</button>
   <button id="airspaceBtn" type="button" onclick="App.toggleAirspace()" title="禁飞区/管控区图层">空域</button>
+  <button id="airFitBtn" type="button" onclick="App.fitAirspace()" title="缩放查看全部机场净空区">✈</button>
   <button id="zoomInBtn" type="button" onclick="App.zoomIn()" title="放大">+</button>
   <button id="zoomOutBtn" type="button" onclick="App.zoomOut()" title="缩小">−</button>
   <button id="locateBtn" type="button" onclick="App.locate()" title="回到我位置">◎</button>
@@ -109,7 +112,7 @@
   <div class="lg-title">空域图层</div>
   <div class="lg-row"><span class="lg-swatch" style="background:rgba(220,38,38,.28);border-color:#dc2626"></span>禁飞区（禁止飞行）</div>
   <div class="lg-row"><span class="lg-swatch" style="background:rgba(245,158,11,.28);border-color:#f59e0b"></span>管控区（限高/报备）</div>
-  <div class="lg-warn" id="airLegendWarn">边界以 UOM 平台发布为准；内置示例数据禁止用于实际飞行判断。</div>
+  <div class="lg-warn" id="airLegendWarn">为依据民航法规与通行口径生成的【参考】净空圈，非 UOM 官方边界；实际可飞性以 UOM 平台报批为准。</div>
 </div>
 <script>
 // ====================================================================
@@ -525,6 +528,18 @@ window.addEventListener('error',function(ev){
         if(lg){ lg.classList.add('show'); }
       }
     },
+    /* 手动缩放至能包住全部净空区（不抢自动定位视图，用户点 ✈ 才跳转） */
+    fitAirspace:function(){
+      var layer=window._airLayer;
+      if(!layer){ setStat('空域数据未加载',false); return; }
+      try{
+        if(!window._airOn){ layer.addTo(map); window._airOn=true;
+          var b=document.getElementById('airspaceBtn'), l=document.getElementById('airLegend');
+          if(b){ b.classList.add('on'); } if(l){ l.classList.add('show'); } }
+        var bd=layer.getBounds();
+        if(bd&&bd.isValid()){ map.flyToBounds(bd,{padding:[42,42],maxZoom:11,duration:.8}); setStat('已缩放至全部机场净空区',true); }
+      }catch(e){ setStat('空域定位失败：'+e.message,false); }
+    },
     connect:function(){
       var bridge=window.AndroidSerial;
       if(!bridge){ setStat('原生串口桥未注入，请重启 APP',false); return; }
@@ -750,8 +765,16 @@ window.addEventListener('error',function(ev){
         }
       });
     };
-    // 首屏先用 APK 内置示例数据建层（云端热更到达前的兜底，离线也能用）
+    // 首屏先用 APK 内置数据建层（云端热更到达前的兜底，离线也能用）
     window._airLayer=window.buildAirspaceLayer(window.RID_AIRSPACE);
+    // 默认开启空域图层（张老师反馈“几乎不显示”：原默认关闭，进图看不到任何圈）
+    if(window._airLayer){
+      try{
+        window._airLayer.addTo(map); window._airOn=true;
+        var ab=document.getElementById('airspaceBtn'), al=document.getElementById('airLegend');
+        if(ab){ ab.classList.add('on'); } if(al){ al.classList.add('show'); }
+      }catch(e){}
+    }
 
     // ===== 云端权威空域热更（原生 AirspaceManager 拉取成功后回调）=====
     // 入参 raw 为 JSON 字符串（原生端 JSONObject.quote 后传入）；坐标仍为 WGS-84
@@ -767,13 +790,12 @@ window.addEventListener('error',function(ev){
         if(wasOn){ newLayer.addTo(map); } // 用户开着空域图：无缝替换，不打断查看状态
         var lg=document.getElementById('airLegend');
         if(lg){ lg.setAttribute('data-hot','1'); }
-        // 热更成功：图例免责文案切换为云端权威来源提示
+        // 热更成功：图例提示更新日期与来源（本数据仍为参考净空圈，不标“权威”避免误导实飞）
         var warn=document.getElementById('airLegendWarn');
         if(warn){
-          var meta='边界以 UOM 平台发布为准。';
+          var meta='为依据民航法规与通行口径生成的【参考】净空圈，非 UOM 官方边界；实际可飞性以 UOM 平台报批为准。';
           if(fc.updatedAt){ meta+=' 数据更新：'+fc.updatedAt+'。'; }
-          if(fc.source){ meta+=' 来源：'+fc.source; }
-          warn.style.color='#15803d'; // 绿色提示权威数据，区别于示例期的橙色警示
+          warn.style.color='#b45309'; // 保持橙色中性提示，不用绿色“权威”措辞
           warn.textContent=meta;
         }
       }catch(e){ /* 解析失败静默保留内置数据，不影响主监测 */ }
