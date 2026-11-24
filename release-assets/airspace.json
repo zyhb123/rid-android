@@ -1,0 +1,52 @@
+{
+  "schema": "rid-airspace/v1",
+  "updatedAt": "2026-11-24",
+  "source": "UOM 民用无人驾驶航空器综合管理平台（人工整理，发布前务必核对）",
+  "_说明": "本文件是【云端热更模板】，发布 GitHub Release 时作为资产上传，文件名必须保持 airspace.json。APP 启动后从 releases/latest/download/airspace.json 拉取，自动替换内置示例。坐标一律用 WGS-84，经纬度顺序 [经度,纬度]，与 GeoJSON 标准一致；APP 渲染时自动转高德 GCJ-02。zoneType 仅支持 no_fly(禁飞区,红) / restricted(管控区,橙)。边界必须来自 UOM 权威发布，禁止臆造。",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "zoneType": "no_fly",
+        "name": "示例-机场净空降高禁飞区（发布前替换为真实数据）",
+        "level": "永久禁飞",
+        "desc": "本条目为模板占位，禁止用于实际飞行判断",
+        "source": "模板占位"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [109.50, 19.60],
+            [109.62, 19.60],
+            [109.62, 19.72],
+            [109.50, 19.72],
+            [109.50, 19.60]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zoneType": "restricted",
+        "name": "示例-管控区（限高/报备，发布前替换为真实数据）",
+        "level": "限高 120 米",
+        "desc": "本条目为模板占位，禁止用于实际飞行判断",
+        "source": "模板占位"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [109.66, 19.58],
+            [109.78, 19.58],
+            [109.78, 19.70],
+            [109.66, 19.70],
+            [109.66, 19.58]
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -101,10 +101,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
+          # 空域热更数据随 Release 一并发布（模板期为明确标注的占位数据，拿到 UOM 真实边界后只改 release-assets/airspace.json 重新发版即可）
+          if [ -f release-assets/airspace.json ]; then
+            cp release-assets/airspace.json dist/airspace.json
+          fi
           TAG="v$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" \
             --title "RIDScanner $TAG" \
             --notes "$(cat dist/update.json)" \
             --latest \
-            dist/RIDScanner-latest.apk dist/update.json
+            dist/RIDScanner-latest.apk dist/update.json dist/airspace.json
           echo "published $TAG"

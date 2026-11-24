@@ -16,6 +16,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var serialManager: UsbSerialManager
     private lateinit var updateManager: UpdateManager
+    private lateinit var airspaceManager: AirspaceManager
 
     @Volatile private var destroyed = false
 
@@ -43,6 +44,8 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 // 启动时若扫描板已插且已授权，自动连接，省一次点击
                 autoConnectIfReady()
+                // 页面就绪后异步拉一次云端空域热数据；失败前端自动回退内置示例，不影响主功能
+                if (!destroyed) airspaceManager.fetch()
             }
         }
         webView.webChromeClient = WebChromeClient()
@@ -57,6 +60,9 @@ class MainActivity : AppCompatActivity() {
         // 注入 OTA 桥：应用内检查更新/下载/覆盖安装
         updateManager = UpdateManager(this, webView)
         webView.addJavascriptInterface(OtaJsBridge(updateManager), "AndroidOta")
+        // 注入空域桥：拉取云端权威空域 GeoJSON 热更（失败静默回退内置 rid_airspace.js）
+        airspaceManager = AirspaceManager(this, webView)
+        webView.addJavascriptInterface(AirspaceJsBridge(airspaceManager), "AndroidAirspace")
 
         // 运行时定位权限（targetSdk 34 必须动态申请）
         ensureLocationPermission()

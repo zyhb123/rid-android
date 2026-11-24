@@ -6,13 +6,29 @@
 <title>RID 移动监测</title>
 <link rel="stylesheet" href="lib/leaflet.css">
 <script src="lib/leaflet.js"></script>
+<script src="rid_airspace.js"></script>
 <style>
   html,body{margin:0;height:100%;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
   #map{position:absolute;inset:0}
-  #recenterBtn{position:absolute;z-index:1000;top:12px;right:12px;padding:9px 14px;font-size:13px;font-weight:700;
-    color:#0c4a6e;background:#fff;border:1px solid #cbd5e1;border-radius:22px;box-shadow:0 2px 8px rgba(15,23,42,.25);
-    cursor:pointer;white-space:nowrap}
-  #recenterBtn:active{background:#e0f2fe}
+  /* 高德式右侧竖排圆形工具条：图层 / 放大 / 缩小 / 定位 */
+  #mapTools{position:absolute;z-index:1000;right:12px;bottom:96px;display:flex;flex-direction:column;gap:11px}
+  #mapTools button{width:46px;height:46px;border-radius:50%;border:none;background:#fff;color:#1f2937;
+    font-size:21px;font-weight:700;box-shadow:0 2px 10px rgba(15,23,42,.28);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;padding:0;-webkit-tap-highlight-color:transparent}
+  #mapTools button:active{background:#e0f2fe}
+  #mapTools #layerBtn{font-size:13px;font-weight:600;color:#0c4a6e}
+  #mapTools #locateBtn{color:#1890ff;font-size:20px}
+  #mapTools #locateBtn.locating{background:#e6f4ff;box-shadow:0 0 0 2px #1890ff,0 2px 10px rgba(24,144,255,.4)}
+  #mapTools #airspaceBtn{font-size:13px;font-weight:600;color:#0c4a6e}
+  #mapTools #airspaceBtn.on{background:#fff1f0;color:#cf1322;box-shadow:0 0 0 2px #ff7875,0 2px 10px rgba(207,19,34,.35)}
+  /* 空域图例（左下角，仅开启空域图层时显示） */
+  #airLegend{position:absolute;z-index:1000;left:12px;bottom:14px;display:none;background:rgba(255,255,255,.94);
+    border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.7;box-shadow:0 2px 10px rgba(15,23,42,.25);color:#1f2937}
+  #airLegend.show{display:block}
+  #airLegend .lg-title{font-weight:700;margin-bottom:2px}
+  #airLegend .lg-row{display:flex;align-items:center;gap:6px}
+  #airLegend .lg-swatch{width:14px;height:14px;border-radius:3px;display:inline-block;border:1px solid rgba(0,0,0,.15)}
+  #airLegend .lg-warn{margin-top:3px;color:#b45309;font-size:11px;max-width:210px}
   #panel{position:absolute;z-index:1000;top:8px;left:8px;width:min(64vw,268px);max-height:74vh;overflow:auto;
     background:rgba(255,255,255,.96);border-radius:10px;padding:7px 9px;box-shadow:0 2px 12px rgba(0,0,0,.25);font-size:12px;transition:width .2s}
   #panel h3{margin:0 0 6px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
@@ -82,7 +98,19 @@
   </div>
 </div>
 <div id="map"></div>
-<button id="recenterBtn" type="button" onclick="App.locate()">📍 回到我位置</button>
+<div id="mapTools">
+  <button id="layerBtn" type="button" onclick="App.toggleLayer()" title="切换图层">路网</button>
+  <button id="airspaceBtn" type="button" onclick="App.toggleAirspace()" title="禁飞区/管控区图层">空域</button>
+  <button id="zoomInBtn" type="button" onclick="App.zoomIn()" title="放大">+</button>
+  <button id="zoomOutBtn" type="button" onclick="App.zoomOut()" title="缩小">−</button>
+  <button id="locateBtn" type="button" onclick="App.locate()" title="回到我位置">◎</button>
+</div>
+<div id="airLegend">
+  <div class="lg-title">空域图层</div>
+  <div class="lg-row"><span class="lg-swatch" style="background:rgba(220,38,38,.28);border-color:#dc2626"></span>禁飞区（禁止飞行）</div>
+  <div class="lg-row"><span class="lg-swatch" style="background:rgba(245,158,11,.28);border-color:#f59e0b"></span>管控区（限高/报备）</div>
+  <div class="lg-warn" id="airLegendWarn">边界以 UOM 平台发布为准；内置示例数据禁止用于实际飞行判断。</div>
+</div>
 <script>
 // ====================================================================
 // 全局错误捕获：老 WebView 不兼容/任何 JS 报错直接显示到页面，截图即可定位
@@ -467,6 +495,36 @@ window.addEventListener('error',function(ev){
     fold:function(){
       document.getElementById('panel').classList.toggle('folded');
     },
+    /* 高德式右侧工具条：图层切换（路网⇄卫星） */
+    toggleLayer:function(){
+      var L=window._mapLayers, btn=document.getElementById('layerBtn');
+      if(!L){ return; }
+      if(window._curLayer==='road'){
+        map.removeLayer(L.road); L.sat.addTo(map); window._curLayer='sat';
+        if(btn){ btn.textContent='卫星'; btn.title='切回路网图'; }
+      } else {
+        map.removeLayer(L.sat); L.road.addTo(map); window._curLayer='road';
+        if(btn){ btn.textContent='路网'; btn.title='切换卫星图'; }
+      }
+      try{ map.invalidateSize(); }catch(e){}
+    },
+    zoomIn:function(){ try{ map.zoomIn(); }catch(e){} },
+    zoomOut:function(){ try{ map.zoomOut(); }catch(e){} },
+    /* 禁飞区/管控区空域图层开关（数据见 rid_airspace.js，WGS84 渲染时转 GCJ-02） */
+    toggleAirspace:function(){
+      var btn=document.getElementById('airspaceBtn'), lg=document.getElementById('airLegend');
+      var layer=window._airLayer;
+      if(!layer){ setStat('空域数据未加载（rid_airspace.js 缺失）',false); return; }
+      if(window._airOn){
+        map.removeLayer(layer); window._airOn=false;
+        if(btn){ btn.classList.remove('on'); }
+        if(lg){ lg.classList.remove('show'); }
+      } else {
+        layer.addTo(map); window._airOn=true;
+        if(btn){ btn.classList.add('on'); }
+        if(lg){ lg.classList.add('show'); }
+      }
+    },
     connect:function(){
       var bridge=window.AndroidSerial;
       if(!bridge){ setStat('原生串口桥未注入，请重启 APP',false); return; }
@@ -495,6 +553,8 @@ window.addEventListener('error',function(ev){
     /* 高德风定位按钮：无权限→主动弹授权框；有权限→催一次新鲜定位并飞到我。
        修复旧版点了没反应（静默失败）。 */
     locate:function(){
+      var lb=document.getElementById('locateBtn');
+      if(lb){ lb.classList.add('locating'); setTimeout(function(){ lb.classList.remove('locating'); },2500); }
       if(!window.AndroidLocation){ setStat('定位桥未注入（需新版 APP）',false); return; }
       var hasPerm=false;
       try{ hasPerm=window.AndroidLocation.hasPermission&&window.AndroidLocation.hasPermission(); }catch(e){}
@@ -643,10 +703,85 @@ window.addEventListener('error',function(ev){
     if(!window.L){ throw new Error('Leaflet 库未加载（lib/leaflet.js 缺失）'); }
     makeIcons();
     map=L.map('map',{zoomControl:false}).setView([19.68,109.68],10);
-    L.control.zoom({position:'bottomright'}).addTo(map);
-    L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',{
+    window._leafletMap=map; // 暴露真实例给外部/调试（注意：全局 window.map 被同名 div 占用，勿混用）
+    // 高德 GCJ-02 路网矢量（默认图层）
+    var roadLayer=L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',{
       subdomains:['1','2','3','4'], maxZoom:18, attribution:'高德地图(GCJ-02)'
-    }).addTo(map);
+    });
+    // 高德卫星：影像(style=6) + 透明路网注记(style=8)；同为 GCJ-02，与 marker 落点天然对齐无需额外纠偏
+    var satImg=L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',{
+      subdomains:['1','2','3','4'], maxZoom:18
+    });
+    var satLabel=L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}',{
+      subdomains:['1','2','3','4'], maxZoom:18
+    });
+    var satLayer=L.layerGroup([satImg,satLabel]);
+    window._mapLayers={road:roadLayer, sat:satLayer};
+    window._curLayer='road';
+    roadLayer.addTo(map);
+
+    // ---------- 禁飞区 / 管控区空域图层（WGS84→GCJ-02；支持云端热更）----------
+    window._airLayer=null; window._airOn=false; window._airHot=false;
+    // 可复用构建器：内置 rid_airspace.js 与云端热更都走这里，保证渲染/转换/弹窗完全一致
+    window.buildAirspaceLayer=function(fc){
+      if(!fc||!fc.features||!fc.features.length){ return null; }
+      // GeoJSON 坐标为 [lng,lat](WGS84)；w2g 返回 [lat,lng](GCJ-02)，在此统一转换
+      var toLatLng=function(coord){
+        var g=w2g(coord[0],coord[1]); // [lat,lng]
+        return L.latLng(g[0],g[1]);
+      };
+      var styleFor=function(feat){
+        var noFly=feat.properties&&feat.properties.zoneType==='no_fly';
+        return noFly ?
+          {color:'#dc2626',weight:1.6,fillColor:'#dc2626',fillOpacity:0.22,dashArray:null} :
+          {color:'#f59e0b',weight:1.6,fillColor:'#f59e0b',fillOpacity:0.20,dashArray:'6,4'};
+      };
+      return L.geoJSON(fc,{
+        coordsToLatLng:toLatLng,
+        style:styleFor,
+        onEachFeature:function(feat,layer){
+          var p=feat.properties||{};
+          var tag=p.zoneType==='no_fly' ? '🚫 禁飞区' : '⚠️ 管控区';
+          var html='<b>'+tag+'</b><br>'+(p.name||'未命名空域')+
+            (p.level?'<br>等级：'+p.level:'')+
+            (p.desc?'<br>'+p.desc:'')+
+            (p.source?'<br><span style="color:#888;font-size:11px">来源：'+p.source+'</span>':'');
+          layer.bindPopup(html,{maxWidth:240});
+        }
+      });
+    };
+    // 首屏先用 APK 内置示例数据建层（云端热更到达前的兜底，离线也能用）
+    window._airLayer=window.buildAirspaceLayer(window.RID_AIRSPACE);
+
+    // ===== 云端权威空域热更（原生 AirspaceManager 拉取成功后回调）=====
+    // 入参 raw 为 JSON 字符串（原生端 JSONObject.quote 后传入）；坐标仍为 WGS-84
+    window.onNativeAirspace=function(raw){
+      try{
+        var fc=typeof raw==='string'?JSON.parse(raw):raw;
+        var newLayer=window.buildAirspaceLayer(fc);
+        if(!newLayer){ return; } // 云端数据异常：保留旧层，不用空数据覆盖
+        var wasOn=!!window._airOn;
+        if(window._airLayer){ try{ map.removeLayer(window._airLayer); }catch(e){} }
+        window._airLayer=newLayer;
+        window._airHot=true; // 标记当前为云端权威数据（区别于内置示例）
+        if(wasOn){ newLayer.addTo(map); } // 用户开着空域图：无缝替换，不打断查看状态
+        var lg=document.getElementById('airLegend');
+        if(lg){ lg.setAttribute('data-hot','1'); }
+        // 热更成功：图例免责文案切换为云端权威来源提示
+        var warn=document.getElementById('airLegendWarn');
+        if(warn){
+          var meta='边界以 UOM 平台发布为准。';
+          if(fc.updatedAt){ meta+=' 数据更新：'+fc.updatedAt+'。'; }
+          if(fc.source){ meta+=' 来源：'+fc.source; }
+          warn.style.color='#15803d'; // 绿色提示权威数据，区别于示例期的橙色警示
+          warn.textContent=meta;
+        }
+      }catch(e){ /* 解析失败静默保留内置数据，不影响主监测 */ }
+    };
+    // 拉取失败（离线/超时/无发布文件）：静默回退内置 rid_airspace.js，不弹窗不打扰
+    window.onNativeAirspaceError=function(info){
+      try{ if(window&&window.console){ console.warn('airspace fetch failed, use built-in:',info&&info.error); } }catch(e){}
+    };
     render();
     // 启动即尝试自动定位（已授权则立刻飞地图；未授权等原生 onNativeLocationGranted 回调）
     window.autoStartLocation();
