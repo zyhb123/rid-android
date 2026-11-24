@@ -72,6 +72,7 @@
     <div id="rssiDebug" style="display:none"></div>
     <pre id="diagOut"></pre>
     <div id="stat">未连接，接 OTG 扫描板后点上方按钮</div>
+    <div id="myCoord" style="font-size:11px;color:#7dd3fc;margin:4px 0 2px;font-family:monospace;display:none"></div>
     <div id="list" style="margin-top:6px"></div>
   </div>
 </div>
@@ -134,6 +135,11 @@ window.addEventListener('error',function(ev){
     if(m==null) return '—';
     if(m<1000) return Math.round(m)+' 米';
     return (m/1000).toFixed(2)+' 公里';
+  }
+  // 经纬度格式化（WGS-84 原生值，6 位小数约 0.1m 精度）；无效返回 —
+  function fmtCoord(lat,lng){
+    if(!validLatLng(lat,lng)) return '—';
+    return num(lat).toFixed(6)+', '+num(lng).toFixed(6);
   }
   // haversine 球面距离，返回米
   function haversine(lat1,lng1,lat2,lng2){
@@ -223,6 +229,8 @@ window.addEventListener('error',function(ev){
     h+='<div class="kv"><span class="k">高度(海拔/离地)</span><span class="v">'+esc(nv(d.drone_altitude,'—'))+' / '+esc(nv(d.height_agl,'—'))+' m</span></div>';
     h+='<div class="kv"><span class="k">速度(水平/垂直)</span><span class="v">'+esc(nv(d.speed_horizontal,'—'))+' / '+esc(nv(d.speed_vertical,'—'))+' m/s</span></div>';
     h+='<div class="kv"><span class="k">航向</span><span class="v">'+esc(nv(d.heading,'—'))+'°</span></div>';
+    h+='<div class="kv"><span class="k">飞机坐标</span><span class="v" style="font-family:monospace;font-size:11px">'+esc(fmtCoord(d.drone_lat,d.drone_long))+'</span></div>';
+    h+='<div class="kv"><span class="k">飞手坐标</span><span class="v" style="font-family:monospace;font-size:11px">'+esc(fmtCoord(d.pilot_lat,d.pilot_long))+'</span></div>';
     h+='<div class="kv"><span class="k">飞手↔无人机</span><span class="v">'+fmtDist(d.distPilot)+'</span></div>';
     h+='<div class="kv"><span class="k">手机↔无人机</span><span class="v">'+fmtDist(d.distPhone)+'</span></div>';
     if(d.operator_id) h+='<div class="kv"><span class="k">运营人ID</span><span class="v">'+esc(d.operator_id)+'</span></div>';
@@ -269,8 +277,8 @@ window.addEventListener('error',function(ev){
       var pgcj=w2g(d.pilot_long,d.pilot_lat);
       if(!d.pilotMarker){
         d.pilotMarker=L.marker(pgcj,{icon:pilotIcon}).addTo(map)
-          .bindPopup('飞手位置<br>'+esc(nv(d.mac,'')));
-      } else { d.pilotMarker.setLatLng(pgcj); }
+          .bindPopup('飞手位置<br><span style="font-family:monospace;font-size:11px">'+esc(fmtCoord(d.pilot_lat,d.pilot_long))+'</span><br>'+esc(nv(d.mac,'')));
+      } else { d.pilotMarker.setLatLng(pgcj); d.pilotMarker.setPopupContent('飞手位置<br><span style="font-family:monospace;font-size:11px">'+esc(fmtCoord(d.pilot_lat,d.pilot_long))+'</span><br>'+esc(nv(d.mac,''))); }
     }
     render();
   }
@@ -286,13 +294,19 @@ window.addEventListener('error',function(ev){
       var d=drones[order[i]];
       var title=UA_TYPE[d.ua_type]||('未知机型#'+d.ua_type);
       html+='<div class="item" data-id="'+esc(d.id)+'">';
-      html+='<div class="t"><span>🛸 '+esc(title)+'</span>'+statusBadge(d.status)+'</div>';
+      html+='<div class="t"><span>🛸 '+esc(title)+'</span><span style="display:flex;align-items:center;gap:6px"><span style="font-size:10px;color:#0284c7;font-weight:400">📍点击看坐标</span>'+statusBadge(d.status)+'</span></div>';
       html+='<div class="meta">';
       html+='<div class="kv"><span class="k">序列号</span><span class="v">'+esc(nv(d.basic_id,'—'))+'</span></div>';
       html+='<div class="kv"><span class="k">信号</span><span class="v" style="color:'+rssiColor(d.rssi)+'">'+esc(nv(d.rssi,'—'))+' dBm · '+esc(nv(d.interface,''))+'</span></div>';
       html+='<div class="kv"><span class="k">飞手↔无人机</span><span class="v dist">'+fmtDist(d.distPilot)+'</span></div>';
       html+='<div class="kv"><span class="k">手机↔无人机</span><span class="v dist">'+fmtDist(d.distPhone)+'</span></div>';
       html+='<div class="kv"><span class="k">高度/速度</span><span class="v">'+esc(nv(d.drone_altitude,'—'))+'m · '+esc(nv(d.speed_horizontal,'—'))+'m/s</span></div>';
+      if(validLatLng(d.drone_lat,d.drone_long)){
+        html+='<div class="kv"><span class="k">飞机坐标</span><span class="v" style="font-family:monospace;font-size:11px">'+num(d.drone_lat).toFixed(6)+', '+num(d.drone_long).toFixed(6)+'</span></div>';
+      }
+      if(validLatLng(d.pilot_lat,d.pilot_long)){
+        html+='<div class="kv"><span class="k">飞手坐标</span><span class="v" style="font-family:monospace;font-size:11px">'+num(d.pilot_lat).toFixed(6)+', '+num(d.pilot_long).toFixed(6)+'</span></div>';
+      }
       html+='</div></div>';
     }
     listEl.innerHTML=html;
@@ -301,10 +315,21 @@ window.addEventListener('error',function(ev){
       items[j].addEventListener('click',(function(el){
         return function(){
           var dd=drones[el.getAttribute('data-id')];
-          if(dd&&dd.marker){
-            map.setView(dd.marker.getLatLng(),Math.max(map.getZoom(),15));
+          if(!dd) return;
+          // 有飞机坐标：飞过去并弹出实时坐标窗（数据刷新时弹窗内容自动跟着更新）
+          if(dd.marker){
+            map.setView(dd.marker.getLatLng(),Math.max(map.getZoom(),16));
             dd.marker.openPopup();
+            return;
           }
+          // 无飞机坐标但有飞手坐标：定位到飞手
+          if(dd.pilotMarker){
+            map.setView(dd.pilotMarker.getLatLng(),Math.max(map.getZoom(),16));
+            dd.pilotMarker.openPopup();
+            return;
+          }
+          // 两者都还没收到坐标：明确提示，不静默
+          setStat('该设备暂未上报位置坐标（可能未起飞或RID未发位置），请稍候或让飞机起飞后再点',false);
         };
       })(items[j]));
     }
@@ -404,6 +429,14 @@ window.addEventListener('error',function(ev){
       render();
       var accTxt=(phone.acc!=null)?(' ±'+Math.round(phone.acc)+'m'):'';
       setStat('定位已开启'+accTxt+'，正在实时计算手机↔无人机距离',true);
+      // 本机经纬度数字（WGS-84 原生坐标，与地图 GCJ-02 落点区分）
+      var mc=document.getElementById('myCoord');
+      if(mc){
+        mc.style.display='block';
+        mc.innerHTML='📍 本机 WGS-84：'+num(phone.lat).toFixed(6)+', '+num(phone.lng).toFixed(6)
+          +(phone.acc!=null?('  ±'+Math.round(phone.acc)+'m'):'')
+          +(phone.src?(' · '+esc(phone.src)):'');
+      }
     } else if(p&&p.reason==='no_permission'){
       setStat('定位权限未授予，点上方「定位到我」在弹窗选允许',false);
     }
